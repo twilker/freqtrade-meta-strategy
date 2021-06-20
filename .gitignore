@@ -1,0 +1,11 @@
+**/bin/**
+**/obj/**
+**/.idea/**
+**/.vs/**
+**/target/**
+**/PublishProfiles/**
+launchSettings.json
+TestResults.xml
+*.csproj.user
+*.bat
+/BenchmarkDotNet.Artifacts
