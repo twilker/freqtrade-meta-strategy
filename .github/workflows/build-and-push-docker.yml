@@ -1,7 +1,9 @@
 name: build tool and push to docker hub
 
 on:
-  push
+  push:
+    branches:
+      - master
 
 jobs:
   docker:

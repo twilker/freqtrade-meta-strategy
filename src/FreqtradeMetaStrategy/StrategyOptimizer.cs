@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Text;
 using System.Text.Json.Serialization;
-using LibGit2Sharp;
 using Newtonsoft.Json;
 using Serilog;
 
@@ -21,17 +20,15 @@ namespace FreqtradeMetaStrategy
 
         private static void UpdateStrategyRepository(ProgramConfiguration programConfiguration)
         {
-            //TODO remove lib2git and use command line
-            //TODO separate services build image from debian
-            if (!Repository.IsValid(StrategyRepoLocation))
+            if (Directory.Exists(StrategyRepoLocation))
             {
-                Repository.Clone(programConfiguration.StrategyRepositoryUrl, StrategyRepoLocation);
+                Directory.Delete(StrategyRepoLocation, true);
             }
-
-            using Repository strategyRepository = new(StrategyRepoLocation);
-            Commands.Pull(strategyRepository, new Signature("bearer", "a.b@c.de", DateTimeOffset.Now), new PullOptions());
+            Directory.Create(StrategyRepoLocation);
+            
+            // Repository.Clone(programConfiguration.StrategyRepositoryUrl, StrategyRepoLocation);
         }
-
+  
         private static ProgramConfiguration ParseConfiguration(FindOptimizedStrategiesOptions options)
         {
             try
