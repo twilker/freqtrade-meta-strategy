@@ -24,7 +24,7 @@ namespace FreqtradeMetaStrategy
             {
                 Directory.Delete(StrategyRepoLocation, true);
             }
-            Directory.Create(StrategyRepoLocation);
+            Directory.CreateDirectory(StrategyRepoLocation);
             
             // Repository.Clone(programConfiguration.StrategyRepositoryUrl, StrategyRepoLocation);
         }
