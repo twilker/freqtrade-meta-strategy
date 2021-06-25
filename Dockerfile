@@ -4,7 +4,8 @@ USER root
 
 RUN apt-get update && \
     apt-get install -y \
-        git
+        git &&\
+	pip install ta
 		
 USER ftuser
 
