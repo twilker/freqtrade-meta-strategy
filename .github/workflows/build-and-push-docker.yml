@@ -13,7 +13,7 @@ jobs:
         uses: actions/checkout@v2
         
       - name: Publish
-        run: dotnet publish src/FreqtradeMetaStrategy/FreqtradeMetaStrategy.csproj -r linux-x64 -o .publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ToolName=strategizer --self-contained true --configuration Release
+        run: dotnet publish src/FreqtradeMetaStrategy/FreqtradeMetaStrategy.csproj -r linux-x64 -o .publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ToolName=strategizer --self-contained true --configuration Release -p:InvariantGlobalization=true
         
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
