@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using CommandLine;
 using Serilog;
+using Serilog.Core;
+using Serilog.Events;
+using Serilog.Formatting.Json;
 
 namespace FreqtradeMetaStrategy
 {
@@ -55,7 +58,7 @@ namespace FreqtradeMetaStrategy
             }
             Log.Logger = new LoggerConfiguration()
                         .MinimumLevel.Verbose()
-                        .WriteTo.File(commonOptions.LogFilePath)
+                        .WriteTo.File(new JsonFormatter(),commonOptions.LogFilePath)
                         .WriteTo.Console()
                         .CreateLogger();
         }

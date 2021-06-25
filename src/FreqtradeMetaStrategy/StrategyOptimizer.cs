@@ -4,31 +4,60 @@ using System.Text;
 using System.Text.Json.Serialization;
 using Newtonsoft.Json;
 using Serilog;
+using Serilog.Core;
 
 namespace FreqtradeMetaStrategy
 {
     internal static class StrategyOptimizer
     {
-        public const string StrategyRepoLocation = "./user_data/strategies_source";
+        private const string StrategyRepoLocation = "./user_data/strategies_source";
+        private static readonly ILogger ClassLogger = Log.ForContext(typeof(StrategyOptimizer));
         
         public static int Optimize(FindOptimizedStrategiesOptions options)
         {
             ProgramConfiguration programConfiguration = ParseConfiguration(options);
-            UpdateStrategyRepository(programConfiguration);
-            return 0;
+            bool result = UpdateStrategyRepository(programConfiguration);
+            return result ? 0 : 1;
         }
 
-        private static void UpdateStrategyRepository(ProgramConfiguration programConfiguration)
+        private static bool UpdateStrategyRepository(ProgramConfiguration programConfiguration)
         {
-            if (Directory.Exists(StrategyRepoLocation))
+            if (!CloneStrategiesRepository(programConfiguration))
             {
-                Directory.Delete(StrategyRepoLocation, true);
+                return false;
             }
-            Directory.CreateDirectory(StrategyRepoLocation);
-            
+
             // Repository.Clone(programConfiguration.StrategyRepositoryUrl, StrategyRepoLocation);
+            return true;
         }
-  
+
+        private static bool CloneStrategiesRepository(ProgramConfiguration programConfiguration)
+        {
+            ClassLogger.Information($"Recreate strategies repository directory in {Path.GetFullPath(StrategyRepoLocation)}");
+            try
+            {
+                if (Directory.Exists(StrategyRepoLocation))
+                {
+                    Directory.Delete(StrategyRepoLocation, true);
+                }
+
+                Directory.CreateDirectory(StrategyRepoLocation);
+            }
+            catch (Exception e)
+            {
+                ClassLogger.Error(e, $"Error while recreating directory. {e}");
+                return false;
+            }
+
+            ClassLogger.Information($"Cloning strategies repository {programConfiguration.StrategyRepositoryUrl}.");
+            if (!ProcessFacade.Execute("git", $"clone {programConfiguration.StrategyRepositoryUrl} {StrategyRepoLocation}"))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
         private static ProgramConfiguration ParseConfiguration(FindOptimizedStrategiesOptions options)
         {
             try
