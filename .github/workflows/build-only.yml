@@ -1,0 +1,19 @@
+name: build tool and docker container
+
+on:
+  push:
+    branches-ignore:
+      - main
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        
+      - name: Build the sources
+        run: dotnet build src -r linux-x64 -p:ToolName=strategizer --configuration Release -p:InvariantGlobalization=true
+        
+      - name: Build docker container
+        run: docker build .
