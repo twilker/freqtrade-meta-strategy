@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Serilog;
 using Serilog.Core;
@@ -11,24 +13,60 @@ namespace FreqtradeMetaStrategy
     internal static class StrategyOptimizer
     {
         private const string StrategyRepoLocation = "./user_data/strategies_source";
+        private const string StrategyRepoStrategiesLocation = "./user_data/strategies_source/user_data/strategies";
         private const string StrategiesAppLocation = "./user_data/strategies";
         private static readonly ILogger ClassLogger = Log.ForContext(typeof(StrategyOptimizer));
+        private static readonly Regex StrategyRecognizer = new Regex(@"^\w\S*$", RegexOptions.Compiled);
         
         public static int Optimize(FindOptimizedStrategiesOptions options)
         {
             ProgramConfiguration programConfiguration = ParseConfiguration(options);
-            bool result = UpdateStrategyRepository(programConfiguration);
+            bool result = UpdateStrategyRepository(programConfiguration, out string[] strategies);
+            if (result)
+            {
+                result = RetrieveTradingPairSets(programConfiguration, out string[] btcBase, out string[] usdtBase);
+            }
             return result ? 0 : 1;
         }
 
-        private static bool UpdateStrategyRepository(ProgramConfiguration programConfiguration)
+        private static bool RetrieveTradingPairSets(ProgramConfiguration programConfiguration, out string[] btcBase, out string[] usdtBase)
         {
+            btcBase = null;
+            usdtBase = null;
+            
+            return true;
+        }
+
+        private static bool UpdateStrategyRepository(ProgramConfiguration programConfiguration, out string[] strategies)
+        {
+            strategies = null;
             if (!CloneStrategiesRepository(programConfiguration))
             {
                 return false;
             }
             
-            //TODO add new method for below code.
+            if (!CopyStrategiesToAppFolder())
+            {
+                return false;
+            }
+
+            return GetStrategyNames(out strategies);
+        }
+
+        private static bool GetStrategyNames(out string[] strategies)
+        {
+            ClassLogger.Information($"Retrieving strategies list.");
+            bool result = ProcessFacade.Execute("freqtrade", "list-strategies -1", out StringBuilder output);
+            strategies = output.ToString().Split(Environment.NewLine, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                               .Reverse()
+                               .TakeWhile(s => StrategyRecognizer.IsMatch(s))
+                               .ToArray();
+            ClassLogger.Information($"Found {strategies.Length} strategies.");
+            return result;
+        }
+
+        private static bool CopyStrategiesToAppFolder()
+        {
             ClassLogger.Information($"Cleanup strategy folder.");
             try
             {
@@ -38,12 +76,14 @@ namespace FreqtradeMetaStrategy
                 }
 
                 Directory.CreateDirectory(StrategiesAppLocation);
-                
+
                 ClassLogger.Information($"Copy all strategies to strategy folder.");
-                
-                foreach (string filePath in Directory.GetFiles(StrategyRepoLocation, "*.*, SearchOptions.AllDirectories"))
+
+                foreach (string filePath in Directory.GetFiles(StrategyRepoStrategiesLocation, "*", SearchOption.AllDirectories))
                 {
-                    File.Copy(filePath, Path.Combine(StrategiesAppLocation, Path.GetFileName(filePath)));
+                    ClassLogger.Verbose($"Copy strategy {Path.GetFileName(filePath)}.");
+                    File.Copy(filePath, Path.Combine(StrategiesAppLocation, Path.GetFileName(filePath)),
+                              true);
                 }
             }
             catch (Exception e)
@@ -51,7 +91,7 @@ namespace FreqtradeMetaStrategy
                 ClassLogger.Error(e, $"Error while updating steategy folder. {e}");
                 return false;
             }
-            
+
             return true;
         }
 
@@ -74,7 +114,7 @@ namespace FreqtradeMetaStrategy
             }
 
             ClassLogger.Information($"Cloning strategies repository {programConfiguration.StrategyRepositoryUrl}.");
-            if (!ProcessFacade.Execute("git", $"clone {programConfiguration.StrategyRepositoryUrl} {StrategyRepoLocation}"))
+            if (!ProcessFacade.Execute("git", $"clone --progress {programConfiguration.StrategyRepositoryUrl} {StrategyRepoLocation}"))
             {
                 return false;
             }

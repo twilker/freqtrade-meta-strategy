@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Text;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -9,9 +10,16 @@ namespace FreqtradeMetaStrategy
     public static class ProcessFacade
     {
         private static readonly ILogger ClassLogger = Log.ForContext(typeof(ProcessFacade));
-        
+
         public static bool Execute(string command, string arguments)
         {
+            return Execute(command, arguments, out _);
+        }
+        
+        public static bool Execute(string command, string arguments, out StringBuilder completeOutput)
+        {
+            completeOutput = new StringBuilder();
+            StringBuilder localOutput = completeOutput;
             bool outputReadStarted = false, errorReadStarted = false;
             ILogger processLogger = Log.ForContext("SourceContext", command);
             ProcessStartInfo startInfo = new(command, arguments)
@@ -71,11 +79,13 @@ namespace FreqtradeMetaStrategy
             
             void ProcessOnOutputDataReceived(object sender, DataReceivedEventArgs e)
             {
+                localOutput.AppendLine(e.Data);
                 processLogger.Information(e.Data);
             }
             
             void ProcessOnErrorDataReceived(object sender, DataReceivedEventArgs e)
             {
+                localOutput.AppendLine(e.Data);
                 processLogger.Warning(e.Data);
             }
         }
