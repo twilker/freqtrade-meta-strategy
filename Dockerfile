@@ -4,10 +4,11 @@ USER root
 
 RUN apt-get update && \
     apt-get install -y \
-        git &&\
-	pip install ta
+        git
 		
 USER ftuser
+
+RUN pip install ta
 
 COPY ./.publish/* /freqtrade/
 
