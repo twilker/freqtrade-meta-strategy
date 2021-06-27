@@ -11,6 +11,7 @@ namespace FreqtradeMetaStrategy
     internal static class StrategyOptimizer
     {
         private const string StrategyRepoLocation = "./user_data/strategies_source";
+        private const string StrategiesAppLocation = "./user_data/strategies";
         private static readonly ILogger ClassLogger = Log.ForContext(typeof(StrategyOptimizer));
         
         public static int Optimize(FindOptimizedStrategiesOptions options)
@@ -26,8 +27,31 @@ namespace FreqtradeMetaStrategy
             {
                 return false;
             }
+            
+            //TODO add new method for below code.
+            ClassLogger.Information($"Cleanup strategy folder.");
+            try
+            {
+                if (Directory.Exists(StrategiesAppLocation))
+                {
+                    Directory.Delete(StrategiesAppLocation, true);
+                }
 
-            // Repository.Clone(programConfiguration.StrategyRepositoryUrl, StrategyRepoLocation);
+                Directory.CreateDirectory(StrategiesAppLocation);
+                
+                ClassLogger.Information($"Copy all strategies to strategy folder.");
+                
+                foreach (string filePath in Directory.GetFiles(StrategyRepoLocation, "*.*, SearchOptions.AllDirectories"))
+                {
+                    File.Copy(filePath, Path.Combine(StrategiesAppLocation, Path.GetFileName(filePath)));
+                }
+            }
+            catch (Exception e)
+            {
+                ClassLogger.Error(e, $"Error while updating steategy folder. {e}");
+                return false;
+            }
+            
             return true;
         }
 
