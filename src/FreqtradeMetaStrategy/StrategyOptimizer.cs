@@ -1,12 +1,17 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
+using RestSharp;
+using RestSharp.Serialization.Json;
 using Serilog;
 using Serilog.Core;
+using JsonSerializer = Newtonsoft.Json.JsonSerializer;
 
 namespace FreqtradeMetaStrategy
 {
@@ -16,7 +21,8 @@ namespace FreqtradeMetaStrategy
         private const string StrategyRepoStrategiesLocation = "./user_data/strategies_source/user_data/strategies";
         private const string StrategiesAppLocation = "./user_data/strategies";
         private static readonly ILogger ClassLogger = Log.ForContext(typeof(StrategyOptimizer));
-        private static readonly Regex StrategyRecognizer = new Regex(@"^\w\S*$", RegexOptions.Compiled);
+        private static readonly Regex StrategyRecognizer = new(@"^\w\S*$", RegexOptions.Compiled);
+        private static readonly Regex PaginationLinks = new(@"\<(?<link>[^\>]*)\>;\s*rel=""(?<type>[^""]*)""", RegexOptions.Compiled);
         
         public static int Optimize(FindOptimizedStrategiesOptions options)
         {
@@ -24,16 +30,57 @@ namespace FreqtradeMetaStrategy
             bool result = UpdateStrategyRepository(programConfiguration, out string[] strategies);
             if (result)
             {
-                result = RetrieveTradingPairSets(programConfiguration, out string[] btcBase, out string[] usdtBase);
+                result = RetrieveTradingPairSets(programConfiguration, out Ticker[] unstableBase, out Ticker[] stableBase);
             }
             return result ? 0 : 1;
         }
 
-        private static bool RetrieveTradingPairSets(ProgramConfiguration programConfiguration, out string[] btcBase, out string[] usdtBase)
+        private static bool RetrieveTradingPairSets(ProgramConfiguration programConfiguration, out Ticker[] unstableBase, out Ticker[] stableBase)
         {
-            btcBase = null;
-            usdtBase = null;
+            unstableBase = null;
+            stableBase = null;
+
+            ClassLogger.Information($"Retrieve all trading pairs from coingecko.");
+            RestClient client = new(programConfiguration.CoingeckoApiBaseUrl);
+            string nextLink;
+            int page = 1;
+            List<Ticker> tickers = new();
             
+            do
+            {
+                RestRequest unstableRequest = new(programConfiguration.CoingeckoGetTickersMethod
+                                                                      .Replace("$(exchange)", programConfiguration.Exchange)
+                                                                      .Replace("$(page)", page.ToString(CultureInfo.InvariantCulture)), 
+                                                  DataFormat.Json);
+                IRestResponse response = client.Get(unstableRequest);
+                CoingeckoTickers result = JsonConvert.DeserializeObject<CoingeckoTickers>(response.Content,
+                    new JsonSerializerSettings
+                    {
+                        Culture = CultureInfo.GetCultureInfo("en-US")
+                    });
+                tickers.AddRange(result?.Tickers??Enumerable.Empty<Ticker>());
+                nextLink = (response.Headers.FirstOrDefault(p => p.Name == "Link")
+                                          ?.Value?.ToString() ?? string.Empty)
+                                 .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                                 .Select(s => PaginationLinks.Match(s))
+                                 .Where(m => m.Success)
+                                 .FirstOrDefault(
+                                      m => StringComparer.OrdinalIgnoreCase.Equals(m.Groups["type"].Value, "last"))
+                                ?.Groups["link"].Value;
+                page++;
+            } while (!string.IsNullOrEmpty(nextLink));
+
+            tickers.RemoveAll(t => t.IsAnomaly ||
+                                   t.IsStale ||
+                                   !StringComparer.OrdinalIgnoreCase.Equals(t.TrustScore, "green"));
+            unstableBase = tickers.Where(t => t.BaseId == programConfiguration.UnstableBaseCoin)
+                                  .ToArray();
+            stableBase = tickers.Where(t => t.BaseId == programConfiguration.StableBaseCoin)
+                                .ToArray();
+            ClassLogger.Verbose(string.Join<Ticker>(Environment.NewLine, unstableBase));
+            ClassLogger.Information($"Found {unstableBase.Length} trading pairs for {programConfiguration.UnstableBaseCoin}");
+            ClassLogger.Verbose(string.Join<Ticker>(Environment.NewLine, stableBase));
+            ClassLogger.Information($"Found {stableBase.Length} trading pairs for {programConfiguration.StableBaseCoin}");
             return true;
         }
 
