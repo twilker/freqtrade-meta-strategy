@@ -9,6 +9,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using RestSharp;
 using RestSharp.Serialization.Json;
 using Serilog;
@@ -28,21 +29,31 @@ namespace FreqtradeMetaStrategy
         private static readonly Regex PaginationLinks = new(@"\<(?<link>[^\>]*)\>;\s*rel=""(?<type>[^""]*)""", RegexOptions.Compiled);
         private static readonly Regex BackTestingTradesPerDay = new(@"^\|\s*Trades per day\s*\|\s*(?<trades>\d+(?:\.\d+)).*\|$", RegexOptions.Compiled);
         private static readonly Regex BackTestingTotalProfit = new(@"^\|\s*Total profit %\s*\|\s*(?<profit>-?\d+(?:\.\d+)).*\|$", RegexOptions.Compiled);
+        private static readonly Regex Stoploss = new(@"stoploss\s*=\s*(?<stoploss>-?\d+(?:\.\d+))", RegexOptions.Compiled);
+        private static readonly Regex TrailingStop = new(@"trailing_stop\s*=\s*(?<trailing_stop>True|False)", RegexOptions.Compiled);
+        private static readonly Regex TrailingStopPositive = new(@"trailing_stop_positive\s*=\s*(?<trailing_stop_positive>-?\d+(?:\.\d+))", RegexOptions.Compiled);
+        private static readonly Regex TrailingStopPositiveOffset = new(@"trailing_stop_positive_offset\s*=\s*(?<trailing_stop_positive_offset>-?\d+(?:\.\d*))", RegexOptions.Compiled);
+        private static readonly Regex TrailingOnlyOffsetIsReached = new(@"trailing_only_offset_is_reached\s*=\s*(?<trailing_only_offset_is_reached>True|False)", RegexOptions.Compiled);
         private static readonly Regex BackTestingPairProfit =
             new(
                 @"^\|\s*(?<pair>[A-Z]*\/[A-Z]*)\s*\|[^\|]*\|[^\|]*\|[^\|]*\|[^\|]*\|\s*(?<total_profit>-?\d+(?:\.\d+)).*\|$"
               , RegexOptions.Compiled);
+
+        private static readonly CultureInfo ConfigCulture = CultureInfo.GetCultureInfo("en-US");
         
-        public static int Optimize(FindOptimizedStrategiesOptions options)
+        public static int OptimizeRestricted(FindOptimizedStrategiesOptions options)
         {
             ProgramConfiguration programConfiguration = ParseConfiguration(options);
+            JObject originalConfig = ParseOriginalConfig();
             bool result = UpdateStrategyRepository(programConfiguration, out string[] strategies);
+            strategies = strategies.Intersect(options.Strategies).ToArray();
             
             Ticker[] unstableStake = null, stableStake = null;
-            BackTestingResult[] testingResults = null;
+            BackTestingResult[] testingResults = Array.Empty<BackTestingResult>();
+            OptimizedStrategy[] optimized = Array.Empty<OptimizedStrategy>();
             if (result)
             {
-                result = RetrieveTradingPairSets(programConfiguration, out unstableStake, out stableStake);
+                result = RetrieveTradingPairSets(programConfiguration, true, out unstableStake, out stableStake);
             }
 
             if (result)
@@ -52,11 +63,319 @@ namespace FreqtradeMetaStrategy
 
             if (result)
             {
-                result = BackTestAllStrategies(strategies, unstableStake, stableStake, programConfiguration,out testingResults);
+                result = BatchBackTestAllStrategies(strategies.Intersect(options.Strategies).ToArray(), unstableStake, stableStake, programConfiguration, originalConfig,out testingResults);
             }
+
+            if (result)
+            {
+                result = OptimizeStrategies(testingResults, programConfiguration, originalConfig, false, out optimized);
+            }
+
+            ClassLogger.Information($"Results:");
+            foreach (OptimizedStrategy strategy in optimized)
+            {
+                ClassLogger.Information(strategy.ToString());
+            }
+            
+            //TODO Luck max 5% for pairs profit
             return result ? 0 : 1;
+
+            JObject ParseOriginalConfig()
+            {
+                using FileStream openStream =
+                    File.Open(Path.Combine("user_data", "config.json"), FileMode.Open, FileAccess.Read);
+                using StreamReader reader = new(openStream, Encoding.Default);
+                using JsonReader jsonReader = new JsonTextReader(reader);
+                originalConfig = JObject.Load(jsonReader);
+
+                return originalConfig;
+            }
+
+            void RestoreOriginalConfig()
+            {
+                using FileStream writeStream = File.Open(Path.Combine("user_data", "config.json"), FileMode.Open, FileAccess.Write);
+                writeStream.SetLength(0);
+                using StreamWriter writer = new(writeStream, Encoding.Default);
+                writer.Write(originalConfig.ToString(Formatting.Indented));
+            }
         }
         
+        public static int Optimize(FindOptimizedStrategiesOptions options)
+        {
+            ProgramConfiguration programConfiguration = ParseConfiguration(options);
+            JObject originalConfig = ParseOriginalConfig();
+            bool result = UpdateStrategyRepository(programConfiguration, out string[] strategies);
+            
+            Ticker[] unstableStake = null, stableStake = null;
+            BackTestingResult[] testingResults = null;
+            if (result)
+            {
+                result = RetrieveTradingPairSets(programConfiguration, false, out unstableStake, out stableStake);
+            }
+
+            if (result)
+            {
+                result = DownloadDataForBackTesting(unstableStake, stableStake);
+            }
+
+            if (result)
+            {
+                result = BackTestAllStrategies(strategies, unstableStake, stableStake, programConfiguration, originalConfig, true,out testingResults);
+            }
+
+            if (result)
+            {
+                result = OptimizeStrategies(testingResults, programConfiguration, originalConfig, true, out OptimizedStrategy[] optimized);
+            }
+
+            RestoreOriginalConfig();
+            //Scoring based on previous results + luck
+            return result ? 0 : 1;
+
+            JObject ParseOriginalConfig()
+            {
+                using FileStream openStream =
+                    File.Open(Path.Combine("user_data", "config.json"), FileMode.Open, FileAccess.Read);
+                using StreamReader reader = new(openStream, Encoding.Default);
+                using JsonReader jsonReader = new JsonTextReader(reader);
+                originalConfig = JObject.Load(jsonReader);
+
+                return originalConfig;
+            }
+
+            void RestoreOriginalConfig()
+            {
+                using FileStream writeStream = File.Open(Path.Combine("user_data", "config.json"), FileMode.Open, FileAccess.Write);
+                writeStream.SetLength(0);
+                using StreamWriter writer = new(writeStream, Encoding.Default);
+                writer.Write(originalConfig.ToString(Formatting.Indented));
+            }
+        }
+
+        private static bool OptimizeStrategies(BackTestingResult[] testingResults,
+                                               ProgramConfiguration programConfiguration, JObject originalConfig, bool optimizePairs,
+                                               out OptimizedStrategy[] optimizedStrategies)
+        {
+            ClassLogger.Information($"Back the {programConfiguration.MaxStrategySuggestions} best strategies.");
+
+            BackTestingResult[] optimizingStrategies = testingResults.OrderByDescending(r => r.ProfitPerDay)
+                                                                     .Take(programConfiguration.MaxStrategySuggestions)
+                                                                     .ToArray();
+            try
+            {
+                optimizedStrategies = optimizingStrategies.Select(Optimize)
+                                                          .ToArray();
+                
+                ClassLogger.Information($"Optimized all strategies.");
+                return true;
+            }
+            catch (Exception e)
+            {
+                optimizedStrategies = null;
+                ClassLogger.Error(e, $"Error while optimizing all strategies. {e}");
+                return false;
+            }
+
+            OptimizedStrategy Optimize(BackTestingResult testingResult)
+            {
+                ClassLogger.Information($"Optimize {testingResult.Strategy}.");
+                JObject optimizedConfig;
+                if (optimizePairs)
+                {
+                    optimizedConfig = CutoffBadPairs(ref testingResult);
+                }
+                else
+                {
+                    IEnumerable<string> pairs = testingResult.PairsProfit.Keys;
+                    string stakeCoin = testingResult.PairsProfit.First().Key.Split("/").Last();
+                    optimizedConfig = ManipulateConfiguration(originalConfig, config =>
+                    {
+                        config["exchange"]["pair_whitelist"] = new JArray(pairs);
+                        config["stake_currency"] = stakeCoin;
+                    });
+                }
+                optimizedConfig = HyperoptStrategy(optimizedConfig, ref testingResult);
+                BackTestingResult shortTermResult = ReevaluateBackTestingResult(programConfiguration, testingResult, programConfiguration.StrategyRunningDays);
+
+                StoreOptimizedConfig();
+
+                return new OptimizedStrategy(testingResult.Strategy, testingResult.ProfitPerDay, shortTermResult.ProfitPerDay);
+
+                void StoreOptimizedConfig()
+                {
+                    using FileStream writeStream = File.Open(Path.Combine("user_data", "strategies", $"{testingResult.Strategy}_Config.json"), FileMode.OpenOrCreate, FileAccess.Write);
+                    writeStream.SetLength(0);
+                    using StreamWriter writer = new(writeStream, Encoding.Default);
+                    writer.Write(optimizedConfig.ToString(Formatting.Indented));
+                }
+                
+                JObject HyperoptStrategy(JObject config, ref BackTestingResult testingResult)
+                {
+                    ClassLogger.Information($"Hyperopt stoploss.");
+                    bool result = ProcessFacade.Execute("freqtrade",
+                                                        $"hyperopt --hyperopt-loss {programConfiguration.HyperoptFunction} --spaces stoploss trailing --strategy {testingResult.Strategy} --data-format-ohlcv hdf5 --dry-run-wallet {(testingResult.IsUnstableStake?programConfiguration.UnstableCoinWallet:programConfiguration.StableCoinWallet)} -e 100",
+                                                        out StringBuilder outputBuilder);
+                    if (!result)
+                    {
+                        ClassLogger.Information($"Hyperopt failed.");
+                        return config;
+                    }
+                    string output = outputBuilder.ToString();
+                    Match match = Stoploss.Match(output);
+                    if (!match.Success ||
+                        !double.TryParse(match.Groups["stoploss"].Value, out double stoploss))
+                    {
+                        ClassLogger.Information($"Hyperopt stoploss could not be parsed: {(match.Success?match.Groups["stoploss"].Value:"False")}");
+                        ClassLogger.Verbose(output);
+                        return config;
+                    }
+
+                    match = TrailingStop.Match(output);
+                    if (!match.Success ||
+                        !bool.TryParse(match.Groups["trailing_stop"].Value, out bool trailingStop))
+                    {
+                        ClassLogger.Information($"Hyperopt trailing_stop could not be parsed: {(match.Success?match.Groups["trailing_stop"].Value:"False")}");
+                        ClassLogger.Verbose(output);
+                        return config;
+                    }
+
+                    match = TrailingStopPositive.Match(output);
+                    if (!match.Success ||
+                        !double.TryParse(match.Groups["trailing_stop_positive"].Value, out double trailingStopPositive))
+                    {
+                        ClassLogger.Information($"Hyperopt trailing_stop_positive could not be parsed: {(match.Success?match.Groups["trailing_stop_positive"].Value:"False")}");
+                        ClassLogger.Verbose(output);
+                        return config;
+                    }
+
+                    match = TrailingStopPositiveOffset.Match(output);
+                    if (!match.Success ||
+                        !double.TryParse(match.Groups["trailing_stop_positive_offset"].Value, out double trailingStopPositiveOffset))
+                    {
+                        ClassLogger.Information($"Hyperopt trailing_stop_positive_offset could not be parsed: {(match.Success?match.Groups["trailing_stop_positive_offset"].Value:"False")}");
+                        ClassLogger.Verbose(output);
+                        return config;
+                    }
+
+                    match = TrailingOnlyOffsetIsReached.Match(output);
+                    if (!match.Success ||
+                        !bool.TryParse(match.Groups["trailing_only_offset_is_reached"].Value, out bool trailingOnlyOffsetIsReached))
+                    {
+                        ClassLogger.Information($"Hyperopt trailing_only_offset_is_reached could not be parsed: {(match.Success?match.Groups["trailing_only_offset_is_reached"].Value:"False")}");
+                        ClassLogger.Verbose(output);
+                        return config;
+                    }
+
+                    JObject newConfig = ManipulateConfiguration(config, o =>
+                    {
+                        if (o.ContainsKey("stoploss"))
+                        {
+                            o["stoploss"] = stoploss;
+                        }
+                        else
+                        {
+                            o.Add("stoploss", stoploss);
+                        }
+                        if (o.ContainsKey("trailing_stop"))
+                        {
+                            o["trailing_stop"] = trailingStop;
+                        }
+                        else
+                        {
+                            o.Add("trailing_stop", trailingStop);
+                        }
+                        if (o.ContainsKey("trailing_stop_positive"))
+                        {
+                            o["trailing_stop_positive"] = trailingStopPositive;
+                        }
+                        else
+                        {
+                            o.Add("trailing_stop_positive", trailingStopPositive);
+                        }
+                        if (o.ContainsKey("trailing_stop_positive_offset"))
+                        {
+                            o["trailing_stop_positive_offset"] = trailingStopPositiveOffset;
+                        }
+                        else
+                        {
+                            o.Add("trailing_stop_positive_offset", trailingStopPositiveOffset);
+                        }
+                        if (o.ContainsKey("trailing_only_offset_is_reached"))
+                        {
+                            o["trailing_only_offset_is_reached"] = trailingOnlyOffsetIsReached;
+                        }
+                        else
+                        {
+                            o.Add("trailing_only_offset_is_reached", trailingOnlyOffsetIsReached);
+                        }
+                    });
+                    
+                    BackTestingResult optimizedResult = ReevaluateBackTestingResult(programConfiguration, testingResult,DefaultBackTestingTimeRange);
+                    if (optimizedResult.ProfitPerDay > testingResult.ProfitPerDay)
+                    {
+                        ClassLogger.Information($"Hyperopt successfully {optimizedResult}.");
+                        testingResult = optimizedResult;
+                        return newConfig;
+                    }
+
+                    ClassLogger.Information($"Hyperopt performed bad ({optimizedResult.ProfitPerDay} < {testingResult.ProfitPerDay}).");
+                    return config;
+                }
+                
+                JObject CutoffBadPairs(ref BackTestingResult testingResult)
+                {
+                    ClassLogger.Information($"Optimize trading pairs.");
+                    double negativeMean = testingResult.PairsProfit.Where(kv => kv.Value < 0)
+                                                       .Select(kv => Math.Abs(kv.Value))
+                                                       .Average();
+                    double cutOffLine = (negativeMean + negativeMean * programConfiguration.PairsCutoffDeviation) * -1;
+                    IEnumerable<string> cutPairs = testingResult.PairsProfit
+                                                                .OrderBy(kv => kv.Value)
+                                                                .TakeWhile(kv => kv.Value < cutOffLine)
+                                                                .Take(programConfiguration.MaxPairsCutoff)
+                                                                .Select(kv => kv.Key)
+                                                                .ToArray();
+                    IEnumerable<string> pairs = testingResult.PairsProfit.Keys.Except(cutPairs);
+                    string stakeCoin = testingResult.PairsProfit.First().Key.Split("/").Last();
+                    
+                    JObject newConfig = ManipulateConfiguration(originalConfig, config =>
+                    {
+                        config["exchange"]["pair_whitelist"] = new JArray(pairs);
+                        config["stake_currency"] = stakeCoin;
+                    });
+                    BackTestingResult newResult = ReevaluateBackTestingResult(programConfiguration, testingResult, DefaultBackTestingTimeRange);
+                    if (newResult.ProfitPerDay < testingResult.ProfitPerDay)
+                    {
+                        throw new InvalidOperationException(
+                            $"{testingResult.Strategy} daily profit shrunk from {testingResult.ProfitPerDay} to {newResult.ProfitPerDay} after cutting off all bad pairs.");
+                    }
+
+                    ClassLogger.Information($"Cut of the pairs {string.Join(", ", cutPairs)}.");
+                    testingResult = newResult;
+                    return newConfig;
+                }
+            }
+        }
+
+        private static BackTestingResult ReevaluateBackTestingResult(ProgramConfiguration programConfiguration,
+                                                                 BackTestingResult testingResult, int testRange)
+        {
+            DateTime startDate = DateTime.Today - new TimeSpan(testRange, 0, 0, 0);
+            bool result = ProcessFacade.Execute("freqtrade",
+                                                $"backtesting --data-format-ohlcv hdf5 --dry-run-wallet {(testingResult.IsUnstableStake ? programConfiguration.UnstableCoinWallet : programConfiguration.StableCoinWallet)} --timerange {startDate:yyyyMMdd}- -s {testingResult.Strategy}",
+                                                out StringBuilder output);
+            if (!result)
+            {
+                throw new InvalidOperationException(
+                    $"Unexpected failure of back testing already tested strategy {testingResult.Strategy}.");
+            }
+
+            BackTestingResult newResult =
+                EvaluateBackTestingResult(output.ToString(), testingResult.Strategy,
+                                          DefaultBackTestingTimeRange, testingResult.IsUnstableStake);
+            return newResult;
+        }
+
         /**
          * string strategiesList = string.Join(" ", preFiltered.Select(r => r.Strategy));
                 DateTime startDate = DateTime.Today - new TimeSpan(programConfiguration.StrategyRunningDays, 0, 0, 0);
@@ -81,23 +400,112 @@ namespace FreqtradeMetaStrategy
                 }
          */
 
+        private static bool BatchBackTestAllStrategies(string[] strategies, Ticker[] unstableStake,
+                                                       Ticker[] stableStake,
+                                                       ProgramConfiguration programConfiguration,
+                                                       JObject originalConfig,
+                                                       out BackTestingResult[] filteredResults)
+        {
+            ClassLogger.Information($"Batch test strategies.");
+            List<BackTestingResult> testResults = new();
+            filteredResults = null;
+            if (!BatchTestStrategies(unstableStake, true))
+            {
+                return false;
+            }
+            if (!BatchTestStrategies(stableStake, false))
+            {
+                return false;
+            }
+
+            filteredResults = FilterResults(testResults, programConfiguration);
+            ClassLogger.Information($"Filtered back testing results:");
+            foreach (BackTestingResult result in filteredResults)
+            {
+                ClassLogger.Information(result.ToString());
+            }
+            return true;
+
+            bool BatchTestStrategies(Ticker[] stake, bool isUnstableStake)
+            {
+                int batches = stake.Length / programConfiguration.BackTestingPairsBatchSize;
+                int startIndex = 0;
+                BatchResultCollector collector = new(stake);
+                for (int i = 0; i < batches; i++)
+                {
+                    int batchSize = i == batches - 1
+                                        ? stake.Length - startIndex
+                                        : programConfiguration.BackTestingPairsBatchSize;
+                    Ticker[] batch = stake.AsSpan(startIndex, batchSize).ToArray();
+                    startIndex += batchSize;
+                    BackTestingResult[] batchResults;
+                    bool result = isUnstableStake
+                                      ? BackTestAllStrategies(strategies, batch, Array.Empty<Ticker>(), programConfiguration,
+                                                                       originalConfig, false, out batchResults)
+                                           :BackTestAllStrategies(strategies, Array.Empty<Ticker>(), batch, programConfiguration,
+                                                                  originalConfig, false, out batchResults);
+                    if (!result)
+                    {
+                        return false;
+                    }
+
+                    collector.Collect(batchResults);
+                }
+
+                ClassLogger.Verbose($"Batch test results:");
+                collector.Log(ClassLogger);
+                foreach (string strategy in strategies)
+                {
+                    ClassLogger.Verbose($"Test optimal batch for {strategy}.");
+                    Ticker[] bestPairs = collector.GetStrategyTickers(strategy, programConfiguration.BackTestingPairsBatchSize)
+                                                  .ToArray();
+                    ClassLogger.Verbose($"Test best pairs for {strategy}:");
+                    foreach (Ticker pair in bestPairs)
+                    {
+                        ClassLogger.Verbose($"{pair.ToTradingPairString()}: {pair.Volume}");
+                    }
+
+                    ManipulateConfiguration(originalConfig, config => config["stake_currency"] = bestPairs[0].Target);
+                    string pairs = string.Join(" ", bestPairs.Select(t => t.ToTradingPairString()));
+                    DateTime startDate = DateTime.Today - new TimeSpan(DefaultBackTestingTimeRange, 0, 0, 0);
+                    bool result = ProcessFacade.Execute("freqtrade",
+                                                        $"backtesting --data-format-ohlcv hdf5 --dry-run-wallet {(isUnstableStake?programConfiguration.UnstableCoinWallet:programConfiguration.StableCoinWallet)} --timerange {startDate:yyyyMMdd}- -p {pairs} -s {strategy}",
+                                                        out StringBuilder output);
+                    if (!result)
+                    {
+                        ClassLogger.Verbose($"Error while finding optimal package for {strategy}.");
+                        continue;
+                    }
+
+                    testResults.Add(EvaluateBackTestingResult(output.ToString(), strategy, DefaultBackTestingTimeRange, true));
+                }
+
+                return true;
+            }
+        }
+        
         private static bool BackTestAllStrategies(string[] strategies, Ticker[] unstableStake, Ticker[] stableStake,
-                                                  ProgramConfiguration programConfiguration, out BackTestingResult[] filteredResults)
+                                                  ProgramConfiguration programConfiguration, JObject originalConfig, bool filter,
+                                                  out BackTestingResult[] filteredResults)
         {
             try
             {
-                bool result = BackTestForCoin(programConfiguration.UnstableStakeCoin, unstableStake, programConfiguration.UnstableCoinWallet, out BackTestingResult[] unstableResults);
+                bool result = BackTestForCoin(programConfiguration.UnstableStakeCoin, unstableStake, programConfiguration.UnstableCoinWallet, true, filter, out BackTestingResult[] unstableResults);
                 filteredResults = unstableResults;
 
                 if (result)
                 {
-                    result = BackTestForCoin(programConfiguration.StableStakeCoin, stableStake, programConfiguration.StableCoinWallet, out BackTestingResult[] stableResults);
+                    result = BackTestForCoin(programConfiguration.StableStakeCoin, stableStake, programConfiguration.StableCoinWallet, false, filter, out BackTestingResult[] stableResults);
                     filteredResults = unstableResults.Concat(stableResults).ToArray();
                 }
 
                 if (result)
                 {
-                    ClassLogger.Information($"Valid strategies:{Environment.NewLine}{string.Join<BackTestingResult>(Environment.NewLine, filteredResults)}");
+                    ClassLogger.Information($"Valid strategies:");
+                    foreach (BackTestingResult testingResult in filteredResults)
+                    {
+                        ClassLogger.Information(testingResult.ToString());
+                    }
                 }
                 
                 return result;
@@ -109,44 +517,64 @@ namespace FreqtradeMetaStrategy
                 return false;
             }
             
-            
-            BackTestingResult[] EvaluateBackTestingResults(string output, int daysCount, IEnumerable<string> strategies)
+            BackTestingResult[] EvaluateBackTestingResults(string output, int daysCount, IEnumerable<string> strategies, bool isUnstableStake)
             {
-                return strategies.Select(s => EvaluateBackTestingResult(output, s, daysCount))
+                return strategies.Select(s => EvaluateBackTestingResult(output, s, daysCount, isUnstableStake))
                                  .ToArray();
             }
-            
-            BackTestingResult[] FilterResults(BackTestingResult[] results, string pairs)
-            {
-                IEnumerable<BackTestingResult> preFiltered = results
-                                                            .Where(r => r.ProfitPerDay >=
-                                                                        programConfiguration.MinimumDailyProfit)
-                                                            .Where(r => r.TradesPerDay >=
-                                                                        programConfiguration.MinimumTradesPerDay);
-                return preFiltered.ToArray();
-            }
 
-            bool BackTestForCoin(string coinId, Ticker[] tickers, double wallet, out BackTestingResult[] tradingResults)
+            bool BackTestForCoin(string coinId, Ticker[] tickers, double wallet, bool isUnstableStake, bool filter,
+                                 out BackTestingResult[] tradingResults)
             {
+                if (tickers.Length == 0)
+                {
+                    tradingResults = Array.Empty<BackTestingResult>();
+                    return true;
+                }
                 ClassLogger.Information($"Back test all strategies with {coinId}.");
 
+                ManipulateConfiguration(originalConfig, config => config["stake_currency"] = tickers[0].Target);
                 string pairs = string.Join(" ", tickers.Select(t => t.ToTradingPairString()));
                 string strategiesList = string.Join(" ", strategies);
+                DateTime startDate = DateTime.Today - new TimeSpan(DefaultBackTestingTimeRange, 0, 0, 0);
                 bool result = ProcessFacade.Execute("freqtrade",
-                                                    $"backtesting --data-format-ohlcv hdf5 --dry-run-wallet {wallet} -p {pairs} --strategy-list {strategiesList}",
+                                                    $"backtesting --data-format-ohlcv hdf5 --dry-run-wallet {wallet} --timerange {startDate:yyyyMMdd}- -p {pairs} --strategy-list {strategiesList}",
                                                     out StringBuilder output);
 
                 ClassLogger.Information(result ? $"Tested all strategies with {coinId}." : "Error while back testing strategies.");
 
                 ClassLogger.Information($"Filter and test found results.");
 
-                tradingResults = EvaluateBackTestingResults(output.ToString(), DefaultBackTestingTimeRange, strategies);
-                tradingResults = FilterResults(tradingResults, pairs);
+                tradingResults = EvaluateBackTestingResults(output.ToString(), DefaultBackTestingTimeRange, strategies, isUnstableStake);
+                if (filter)
+                {
+                    tradingResults = FilterResults(tradingResults, programConfiguration);
+                }
                 return result;
             }
         }
 
-        private static BackTestingResult EvaluateBackTestingResult(string output, string strategyName, int daysCount)
+        private static BackTestingResult[] FilterResults(IEnumerable<BackTestingResult> results, ProgramConfiguration programConfiguration)
+        {
+            IEnumerable<BackTestingResult> preFiltered = results.Where(r => r.ProfitPerDay >= programConfiguration.MinimumDailyProfit)
+                                                                .Where(r => r.TradesPerDay >= programConfiguration.MinimumTradesPerDay);
+            return preFiltered.ToArray();
+        }
+
+        private static JObject ManipulateConfiguration(JObject originalConfig, Action<JObject> manipulate)
+        {
+            JObject config = (JObject) originalConfig.DeepClone();
+            manipulate(config);
+            using FileStream fileStream =
+                File.Open(Path.Combine("user_data", "config.json"), FileMode.Open, FileAccess.Write);
+            fileStream.Seek(0, SeekOrigin.Begin);
+            fileStream.SetLength(0);
+            using StreamWriter writer = new(fileStream, Encoding.Default);
+            writer.Write(config.ToString(Formatting.Indented));
+            return config;
+        }
+
+        private static BackTestingResult EvaluateBackTestingResult(string output, string strategyName, int daysCount, bool isUnstableStake)
         {
             List<string> outputSplit = output.Split(Environment.NewLine,
                                                     StringSplitOptions.TrimEntries |
@@ -166,7 +594,7 @@ namespace FreqtradeMetaStrategy
             {
                 pairProfits.Add(pairLineMatch.Groups["pair"].Value,
                                 double.Parse(pairLineMatch.Groups["total_profit"].Value,
-                                             CultureInfo.GetCultureInfo("en-US")));
+                                             ConfigCulture));
                 current++;
                 pairLineMatch = BackTestingPairProfit.Match(outputSplit[current]);
             }
@@ -178,10 +606,11 @@ namespace FreqtradeMetaStrategy
                                                 .Select(l => BackTestingTotalProfit.Match(l))
                                                 .First(m => m.Success);
             double tradesPerDay = double.Parse(tradesPerDayMatch.Groups["trades"].Value,
-                                               CultureInfo.GetCultureInfo("en-US"));
-            double dailyProfit = double.Parse(totalProfitMatch.Groups["profit"].Value,
-                                              CultureInfo.GetCultureInfo("en-US")) / (100 * daysCount);
-            return new BackTestingResult(strategyName, dailyProfit, tradesPerDay, pairProfits);
+                                               ConfigCulture);
+            double totalProfit = double.Parse(totalProfitMatch.Groups["profit"].Value,
+                                              ConfigCulture);
+            double dailyProfit = Math.Pow(totalProfit/100,1.0/daysCount)-1;
+            return new BackTestingResult(strategyName, dailyProfit, tradesPerDay, pairProfits, isUnstableStake);
         }
 
         private static bool DownloadDataForBackTesting(Ticker[] unstableBase, Ticker[] stableBase)
@@ -195,38 +624,46 @@ namespace FreqtradeMetaStrategy
             return result;
         }
 
-        private static bool RetrieveTradingPairSets(ProgramConfiguration programConfiguration, out Ticker[] unstableStake, out Ticker[] stableStake)
+        private static bool RetrieveTradingPairSets(ProgramConfiguration programConfiguration, bool getAll, out Ticker[] unstableStake, out Ticker[] stableStake)
         {
             unstableStake = null;
             stableStake = null;
 
             try
             {
-                ClassLogger.Information($"Retrieve all trading pairs from coingecko.");
-                RestClient client = new(programConfiguration.CoingeckoApiBaseUrl);
-                if (!GetTickers(client, out List<Ticker> tickers))
+                if (!TryGetTickers(out List<Ticker> tickers))
                 {
                     return false;
                 }
 
-                tickers.RemoveAll(t => t.IsAnomaly ||
-                                       t.IsStale ||
-                                       !StringComparer.OrdinalIgnoreCase.Equals(t.TrustScore, "green"));
-                AddTrustRating(tickers, client);
-                
-                unstableStake = SortedAndFilteredTickers(programConfiguration.UnstableStakeCoin, tickers)
-                              .Take(programConfiguration.MaxTradingPairs)
-                              .ToArray();
-                stableStake = SortedAndFilteredTickers(programConfiguration.StableStakeCoin, tickers)
-                            .OrderByDescending(t => t.WeightedValue)
-                            .Take(programConfiguration.MaxTradingPairs)
-                            .ToArray();
+                if (getAll)
+                {
+                    unstableStake = FilteredTickers(programConfiguration.UnstableStakeCoin, tickers)
+                                   .ToArray();
+                    stableStake = FilteredTickers(programConfiguration.StableStakeCoin, tickers)
+                                 .ToArray();
+                }
+                else
+                {
+                    unstableStake = SortedAndFilteredTickers(programConfiguration.UnstableStakeCoin, tickers)
+                                   .Take(programConfiguration.MaxTradingPairs)
+                                   .ToArray();
+                    stableStake = SortedAndFilteredTickers(programConfiguration.StableStakeCoin, tickers)
+                                 .Take(programConfiguration.MaxTradingPairs)
+                                 .ToArray();
+                }
                 ClassLogger.Information($"Found {tickers.Count(t => t.TargetId == programConfiguration.UnstableStakeCoin)} trading pairs for {programConfiguration.UnstableStakeCoin}");
-                ClassLogger.Verbose($"Chosen pairs for {programConfiguration.UnstableStakeCoin}{Environment.NewLine}" +
-                                    string.Join(Environment.NewLine, unstableStake.Select(t => t.ToString())));
+                ClassLogger.Verbose($"Chosen pairs for {programConfiguration.UnstableStakeCoin}");
+                foreach (Ticker ticker in unstableStake)
+                {
+                    ClassLogger.Verbose(ticker.ToString());
+                }
                 ClassLogger.Information($"Found {tickers.Count(t => t.TargetId == programConfiguration.StableStakeCoin)} trading pairs for {programConfiguration.StableStakeCoin}");
-                ClassLogger.Verbose($"Chosen pairs for {programConfiguration.StableStakeCoin}{Environment.NewLine}" +
-                                    string.Join(Environment.NewLine, stableStake.Select(t => t.ToString())));
+                ClassLogger.Verbose($"Chosen pairs for {programConfiguration.StableStakeCoin}");
+                foreach (Ticker ticker in stableStake)
+                {
+                    ClassLogger.Verbose(ticker.ToString());
+                }
             }
             catch (Exception e)
             {
@@ -250,6 +687,15 @@ namespace FreqtradeMetaStrategy
                 }
 
                 return filtered.OrderByDescending(t => t.WeightedValue).Distinct().ToArray();
+            }
+
+            Ticker[] FilteredTickers(string targetId, List<Ticker> tickers)
+            {
+                Ticker[] filtered = tickers.Where(t => t.TargetId == targetId)
+                                           .Where(t => t.TrustRating >= programConfiguration.MinimumTrustScore)
+                                           .Distinct()
+                                           .ToArray();
+                return filtered;
             }
 
             IRestResponse GetRateLimitedResponse(RestClient client, RestRequest request)
@@ -339,7 +785,7 @@ namespace FreqtradeMetaStrategy
                     CoingeckoTickers result = JsonConvert.DeserializeObject<CoingeckoTickers>(response.Content,
                         new JsonSerializerSettings
                         {
-                            Culture = CultureInfo.GetCultureInfo("en-US")
+                            Culture = ConfigCulture
                         });
                     tickers.AddRange(result?.Tickers ?? Enumerable.Empty<Ticker>());
                     nextLink = (response.Headers.FirstOrDefault(p => p.Name == "Link")
@@ -354,6 +800,67 @@ namespace FreqtradeMetaStrategy
                 } while (!string.IsNullOrEmpty(nextLink));
 
                 return true;
+            }
+
+            bool TryGetTickers(out List<Ticker> tickers)
+            {
+                if (TryGetCachedTickers(out tickers))
+                {
+                    return true;
+                }
+                ClassLogger.Information($"Retrieve all trading pairs from coingecko.");
+                RestClient client = new(programConfiguration.CoingeckoApiBaseUrl);
+                if (!GetTickers(client, out tickers))
+                {
+                    return false;
+                }
+
+                tickers.RemoveAll(t => t.IsAnomaly ||
+                                       t.IsStale ||
+                                       !StringComparer.OrdinalIgnoreCase.Equals(t.TrustScore, "green"));
+                AddTrustRating(tickers, client);
+                UpdateCache(tickers);
+                return true;
+
+                bool TryGetCachedTickers(out List<Ticker> tickers)
+                {
+                    string cacheFile = Path.Combine("user_data", "tickers_cache", "cache.json");
+                    tickers = null;
+                    try
+                    {
+                        if (!File.Exists(cacheFile))
+                        {
+                            return false;
+                        }
+
+                        TickersCache cache =  JsonConvert.DeserializeObject<TickersCache>(File.ReadAllText(cacheFile, Encoding.UTF8));
+                        if (cache == null ||
+                            cache.ValidUntil < DateTime.Now)
+                        {
+                            return false;
+                        }
+                        tickers = new List<Ticker>(cache.Tickers);
+                        return true;
+                    }
+                    catch (Exception e)
+                    {
+                        ClassLogger.Warning(e, $"Error while reading the ticker cache. {e}");
+                        return false;
+                    }
+                }
+
+                void UpdateCache(List<Ticker> tickers)
+                {
+                    string cacheDirectory = Path.Combine("user_data", "tickers_cache");
+                    if (!Directory.Exists(cacheDirectory))
+                    {
+                        Directory.CreateDirectory(cacheDirectory);
+                    }
+
+                    TickersCache cache = new(DateTime.Now + new TimeSpan(2, 0, 0), tickers.ToArray());
+                    File.WriteAllText(Path.Combine(cacheDirectory, "cache.json"),
+                                      JsonConvert.SerializeObject(cache, Formatting.Indented), Encoding.UTF8);
+                }
             }
         }
 
@@ -459,6 +966,53 @@ namespace FreqtradeMetaStrategy
             {
                 Log.Warning(e, $"Error while parsing the config file in {options.ConfigFile}.{Environment.NewLine}{e}");
                 return new ProgramConfiguration();
+            }
+        }
+        
+        private class BatchResultCollector
+        {
+            private readonly Dictionary<string, Dictionary<Ticker, double>> pairs = new();
+            private readonly Dictionary<string, Ticker> allTickers;
+
+            public BatchResultCollector(IEnumerable<Ticker> allTickers)
+            {
+                this.allTickers = allTickers.ToDictionary(t => t.ToTradingPairString(), t => t);
+            }
+
+            public void Collect(IEnumerable<BackTestingResult> results)
+            {
+                foreach (BackTestingResult result in results)
+                {
+                    if (!pairs.ContainsKey(result.Strategy))
+                    {
+                        pairs.Add(result.Strategy, new Dictionary<Ticker, double>());
+                    }
+
+                    foreach (KeyValuePair<string,double> pair in result.PairsProfit)
+                    {
+                        pairs[result.Strategy][allTickers[pair.Key]] = pair.Value;
+                    }
+                }
+            }
+
+            public IEnumerable<Ticker> GetStrategyTickers(string strategy, int cutoff)
+            {
+                return pairs[strategy].OrderByDescending(kv => kv.Value)
+                                      .Take(cutoff)
+                                      .Select(kv => kv.Key);
+            }
+
+            public void Log(ILogger classLogger)
+            {
+                foreach (KeyValuePair<string,Dictionary<Ticker,double>> strategy in pairs)
+                {
+                    classLogger.Verbose(strategy.Key);
+                    classLogger.Verbose("======================");
+                    foreach (KeyValuePair<Ticker,double> kv in strategy.Value)
+                    {
+                        classLogger.Verbose($"{kv.Key.ToTradingPairString()}: {kv.Value} - {kv.Key.Volume}");
+                    }
+                }
             }
         }
     }

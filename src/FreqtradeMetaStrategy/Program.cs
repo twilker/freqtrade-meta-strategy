@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using CommandLine;
 using Serilog;
 using Serilog.Core;
@@ -47,6 +48,11 @@ namespace FreqtradeMetaStrategy
         private static int ExecuteFindStrategy(FindOptimizedStrategiesOptions options)
         {
             ConfigureLogging(options);
+            if (options.Strategies != null &&
+                options.Strategies.Any())
+            {
+                return StrategyOptimizer.OptimizeRestricted(options);
+            }
             return StrategyOptimizer.Optimize(options);
         }
 
@@ -75,6 +81,9 @@ namespace FreqtradeMetaStrategy
     {
         [Option('c', "config", HelpText = "Path to the config file.", Default = "./meta-strategy-config.json")]
         public string ConfigFile { get; set; }
+        
+        [Option('s', "strategies", HelpText = "A list of strategies to optimize - this restricts the amount of strategies. It still considers the black list in the config.", Separator = ',')]
+        public IEnumerable<string> Strategies { get; set; }
     }
 
     public class CommonOptions

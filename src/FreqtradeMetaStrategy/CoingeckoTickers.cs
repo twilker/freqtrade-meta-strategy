@@ -14,6 +14,18 @@ namespace FreqtradeMetaStrategy
         }
     }
 
+    public class TickersCache
+    {
+        public TickersCache(DateTime validUntil, Ticker[] tickers)
+        {
+            ValidUntil = validUntil;
+            Tickers = tickers;
+        }
+
+        public DateTime ValidUntil { get; set; }
+        public Ticker[] Tickers { get; set; }
+    }
+
     public class Ticker : IEquatable<Ticker>
     {
         public string Base { get; set; }
@@ -29,7 +41,7 @@ namespace FreqtradeMetaStrategy
         public bool IsAnomaly { get; set; }
         [JsonProperty(PropertyName = "is_stale")]
         public bool IsStale { get; set; }
-        [JsonIgnore]
+        //[JsonIgnore]
         public double TrustRating { get; set; }
         [JsonIgnore]
         public int TrustRank { get; set; }
