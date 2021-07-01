@@ -12,24 +12,24 @@ namespace FreqtradeMetaStrategy
         public double StableCoinWallet { get; set; } = 500;
         public string Exchange { get; set; } = "binance";
         public string HyperoptFunction { get; set; } = "SortinoHyperOptLossDaily";
-        public int MaxTradingPairs { get; set; } = 15;
         public int VolumeWeight { get; set; } = 1;
         public int TrustWeight { get; set; } = 1;
         public int RateLimitTimeout { get; set; } = 70000;
         public int BackTestingPairsBatchSize { get; set; } = 10;
         public double MinimumTrustScore { get; set; } = 50;
         public double MinimumDailyProfit { get; set; } = 0.005;
-        public double PairsCutoffDeviation { get; set; } = 0.1;
         public double MinimumTradesPerDay { get; set; } = 1;
         public int MaxStrategySuggestions { get; set; } = 5;
-        public int MaxPairsCutoff { get; set; } = 5;
         public int StrategyRunningDays { get; set; } = 3;
-        public double AllowedShortTermVariance { get; set; } = 0.75;
 
         public string[] StrategyBlacklist { get; set; } =
         {
             "MultiMa",
-            "InformativeSample"
+            "InformativeSample",
+            "GodStra",
+            "GodStraNew",
+            "Supertrend",
+            "Zeus"
         };
     }
 }

@@ -48,11 +48,6 @@ namespace FreqtradeMetaStrategy
         private static int ExecuteFindStrategy(FindOptimizedStrategiesOptions options)
         {
             ConfigureLogging(options);
-            if (options.Strategies != null &&
-                options.Strategies.Any())
-            {
-                return StrategyOptimizer.OptimizeRestricted(options);
-            }
             return StrategyOptimizer.Optimize(options);
         }
 

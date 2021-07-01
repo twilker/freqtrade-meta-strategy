@@ -18,6 +18,14 @@ using JsonSerializer = Newtonsoft.Json.JsonSerializer;
 
 namespace FreqtradeMetaStrategy
 {
+    //TODO
+    //try with all strategies
+    //Luck max 5% for pairs profit
+    //config changes as extra config
+    //Change to agents net
+    //validate old results
+    //consider trade volume based on wallet size/5
+    //try strategy evaluation based on 6/3 days
     internal static class StrategyOptimizer
     {
         private const string StrategyRepoLocation = "./user_data/strategies_source";
@@ -41,19 +49,22 @@ namespace FreqtradeMetaStrategy
 
         private static readonly CultureInfo ConfigCulture = CultureInfo.GetCultureInfo("en-US");
         
-        public static int OptimizeRestricted(FindOptimizedStrategiesOptions options)
+        public static int Optimize(FindOptimizedStrategiesOptions options)
         {
             ProgramConfiguration programConfiguration = ParseConfiguration(options);
             JObject originalConfig = ParseOriginalConfig();
             bool result = UpdateStrategyRepository(programConfiguration, out string[] strategies);
-            strategies = strategies.Intersect(options.Strategies).ToArray();
+            if (options.Strategies?.Any() == true)
+            {
+                strategies = strategies.Intersect(options.Strategies).ToArray();
+            }
             
             Ticker[] unstableStake = null, stableStake = null;
             BackTestingResult[] testingResults = Array.Empty<BackTestingResult>();
             OptimizedStrategy[] optimized = Array.Empty<OptimizedStrategy>();
             if (result)
             {
-                result = RetrieveTradingPairSets(programConfiguration, true, out unstableStake, out stableStake);
+                result = RetrieveTradingPairSets(programConfiguration, out unstableStake, out stableStake);
             }
 
             if (result)
@@ -68,7 +79,7 @@ namespace FreqtradeMetaStrategy
 
             if (result)
             {
-                result = OptimizeStrategies(testingResults, programConfiguration, originalConfig, false, out optimized);
+                result = OptimizeStrategies(testingResults, programConfiguration, originalConfig, out optimized);
             }
 
             ClassLogger.Information($"Results:");
@@ -77,59 +88,8 @@ namespace FreqtradeMetaStrategy
                 ClassLogger.Information(strategy.ToString());
             }
             
-            //TODO Luck max 5% for pairs profit
-            return result ? 0 : 1;
-
-            JObject ParseOriginalConfig()
-            {
-                using FileStream openStream =
-                    File.Open(Path.Combine("user_data", "config.json"), FileMode.Open, FileAccess.Read);
-                using StreamReader reader = new(openStream, Encoding.Default);
-                using JsonReader jsonReader = new JsonTextReader(reader);
-                originalConfig = JObject.Load(jsonReader);
-
-                return originalConfig;
-            }
-
-            void RestoreOriginalConfig()
-            {
-                using FileStream writeStream = File.Open(Path.Combine("user_data", "config.json"), FileMode.Open, FileAccess.Write);
-                writeStream.SetLength(0);
-                using StreamWriter writer = new(writeStream, Encoding.Default);
-                writer.Write(originalConfig.ToString(Formatting.Indented));
-            }
-        }
-        
-        public static int Optimize(FindOptimizedStrategiesOptions options)
-        {
-            ProgramConfiguration programConfiguration = ParseConfiguration(options);
-            JObject originalConfig = ParseOriginalConfig();
-            bool result = UpdateStrategyRepository(programConfiguration, out string[] strategies);
-            
-            Ticker[] unstableStake = null, stableStake = null;
-            BackTestingResult[] testingResults = null;
-            if (result)
-            {
-                result = RetrieveTradingPairSets(programConfiguration, false, out unstableStake, out stableStake);
-            }
-
-            if (result)
-            {
-                result = DownloadDataForBackTesting(unstableStake, stableStake);
-            }
-
-            if (result)
-            {
-                result = BackTestAllStrategies(strategies, unstableStake, stableStake, programConfiguration, originalConfig, true,out testingResults);
-            }
-
-            if (result)
-            {
-                result = OptimizeStrategies(testingResults, programConfiguration, originalConfig, true, out OptimizedStrategy[] optimized);
-            }
-
             RestoreOriginalConfig();
-            //Scoring based on previous results + luck
+            
             return result ? 0 : 1;
 
             JObject ParseOriginalConfig()
@@ -153,7 +113,7 @@ namespace FreqtradeMetaStrategy
         }
 
         private static bool OptimizeStrategies(BackTestingResult[] testingResults,
-                                               ProgramConfiguration programConfiguration, JObject originalConfig, bool optimizePairs,
+                                               ProgramConfiguration programConfiguration, JObject originalConfig,
                                                out OptimizedStrategy[] optimizedStrategies)
         {
             ClassLogger.Information($"Back the {programConfiguration.MaxStrategySuggestions} best strategies.");
@@ -180,20 +140,13 @@ namespace FreqtradeMetaStrategy
             {
                 ClassLogger.Information($"Optimize {testingResult.Strategy}.");
                 JObject optimizedConfig;
-                if (optimizePairs)
+                IEnumerable<string> pairs = testingResult.PairsProfit.Keys;
+                string stakeCoin = testingResult.PairsProfit.First().Key.Split("/").Last();
+                optimizedConfig = ManipulateConfiguration(originalConfig, config =>
                 {
-                    optimizedConfig = CutoffBadPairs(ref testingResult);
-                }
-                else
-                {
-                    IEnumerable<string> pairs = testingResult.PairsProfit.Keys;
-                    string stakeCoin = testingResult.PairsProfit.First().Key.Split("/").Last();
-                    optimizedConfig = ManipulateConfiguration(originalConfig, config =>
-                    {
-                        config["exchange"]["pair_whitelist"] = new JArray(pairs);
-                        config["stake_currency"] = stakeCoin;
-                    });
-                }
+                    config["exchange"]["pair_whitelist"] = new JArray(pairs);
+                    config["stake_currency"] = stakeCoin;
+                });
                 optimizedConfig = HyperoptStrategy(optimizedConfig, ref testingResult);
                 BackTestingResult shortTermResult = ReevaluateBackTestingResult(programConfiguration, testingResult, programConfiguration.StrategyRunningDays);
 
@@ -203,10 +156,13 @@ namespace FreqtradeMetaStrategy
 
                 void StoreOptimizedConfig()
                 {
-                    using FileStream writeStream = File.Open(Path.Combine("user_data", "strategies", $"{testingResult.Strategy}_Config.json"), FileMode.OpenOrCreate, FileAccess.Write);
-                    writeStream.SetLength(0);
+                    string configPath =
+                        Path.Combine("user_data", "strategies", $"{testingResult.Strategy}_Config.json");
+                    using FileStream writeStream = File.Open(configPath, FileMode.Create, FileAccess.Write);
                     using StreamWriter writer = new(writeStream, Encoding.Default);
                     writer.Write(optimizedConfig.ToString(Formatting.Indented));
+                    writer.Flush();
+                    ClassLogger.Information($"Stored strategy config in {Path.Combine("user_data", "strategies", $"{testingResult.Strategy}_Config.json")}");
                 }
                 
                 JObject HyperoptStrategy(JObject config, ref BackTestingResult testingResult)
@@ -321,39 +277,6 @@ namespace FreqtradeMetaStrategy
                     ClassLogger.Information($"Hyperopt performed bad ({optimizedResult.ProfitPerDay} < {testingResult.ProfitPerDay}).");
                     return config;
                 }
-                
-                JObject CutoffBadPairs(ref BackTestingResult testingResult)
-                {
-                    ClassLogger.Information($"Optimize trading pairs.");
-                    double negativeMean = testingResult.PairsProfit.Where(kv => kv.Value < 0)
-                                                       .Select(kv => Math.Abs(kv.Value))
-                                                       .Average();
-                    double cutOffLine = (negativeMean + negativeMean * programConfiguration.PairsCutoffDeviation) * -1;
-                    IEnumerable<string> cutPairs = testingResult.PairsProfit
-                                                                .OrderBy(kv => kv.Value)
-                                                                .TakeWhile(kv => kv.Value < cutOffLine)
-                                                                .Take(programConfiguration.MaxPairsCutoff)
-                                                                .Select(kv => kv.Key)
-                                                                .ToArray();
-                    IEnumerable<string> pairs = testingResult.PairsProfit.Keys.Except(cutPairs);
-                    string stakeCoin = testingResult.PairsProfit.First().Key.Split("/").Last();
-                    
-                    JObject newConfig = ManipulateConfiguration(originalConfig, config =>
-                    {
-                        config["exchange"]["pair_whitelist"] = new JArray(pairs);
-                        config["stake_currency"] = stakeCoin;
-                    });
-                    BackTestingResult newResult = ReevaluateBackTestingResult(programConfiguration, testingResult, DefaultBackTestingTimeRange);
-                    if (newResult.ProfitPerDay < testingResult.ProfitPerDay)
-                    {
-                        throw new InvalidOperationException(
-                            $"{testingResult.Strategy} daily profit shrunk from {testingResult.ProfitPerDay} to {newResult.ProfitPerDay} after cutting off all bad pairs.");
-                    }
-
-                    ClassLogger.Information($"Cut of the pairs {string.Join(", ", cutPairs)}.");
-                    testingResult = newResult;
-                    return newConfig;
-                }
             }
         }
 
@@ -375,30 +298,6 @@ namespace FreqtradeMetaStrategy
                                           DefaultBackTestingTimeRange, testingResult.IsUnstableStake);
             return newResult;
         }
-
-        /**
-         * string strategiesList = string.Join(" ", preFiltered.Select(r => r.Strategy));
-                DateTime startDate = DateTime.Today - new TimeSpan(programConfiguration.StrategyRunningDays, 0, 0, 0);
-                bool result = ProcessFacade.Execute("freqtrade", $"backtesting --data-format-ohlcv hdf5 --dry-run-wallet {programConfiguration.UnstableCoinWallet} --timerange {startDate:yyyyMMdd}- -p {pairs} --strategy-list {strategiesList}", out StringBuilder output);
-                
-                if (!result)
-                {
-                    throw new InvalidOperationException($"Unexpected failure of backtesting already tested strategies.");
-                }
-                
-                BackTestingResult[] shortTermResults = EvaluateBackTestingResults(output.ToString(), programConfiguration.StrategyRunningDays);
-
-                return results.Where(r => shortTermResults.Any(st => IsGoodEnough(st, r)))
-                              .ToArray();
-
-                bool IsGoodEnough(BackTestingResult shortTerm, BackTestingResult longTerm)
-                {
-                    return shortTerm.Strategy == longTerm.Strategy &&
-                           shortTerm.ProfitPerDay >= programConfiguration.MinimumDailyProfit &&
-                           (shortTerm.ProfitPerDay >= longTerm.ProfitPerDay ||
-                            shortTerm.ProfitPerDay/longTerm.ProfitPerDay >= programConfiguration.AllowedShortTermVariance);
-                }
-         */
 
         private static bool BatchBackTestAllStrategies(string[] strategies, Ticker[] unstableStake,
                                                        Ticker[] stableStake,
@@ -441,9 +340,9 @@ namespace FreqtradeMetaStrategy
                     BackTestingResult[] batchResults;
                     bool result = isUnstableStake
                                       ? BackTestAllStrategies(strategies, batch, Array.Empty<Ticker>(), programConfiguration,
-                                                                       originalConfig, false, out batchResults)
+                                                                       originalConfig, out batchResults)
                                            :BackTestAllStrategies(strategies, Array.Empty<Ticker>(), batch, programConfiguration,
-                                                                  originalConfig, false, out batchResults);
+                                                                  originalConfig, out batchResults);
                     if (!result)
                     {
                         return false;
@@ -485,17 +384,17 @@ namespace FreqtradeMetaStrategy
         }
         
         private static bool BackTestAllStrategies(string[] strategies, Ticker[] unstableStake, Ticker[] stableStake,
-                                                  ProgramConfiguration programConfiguration, JObject originalConfig, bool filter,
+                                                  ProgramConfiguration programConfiguration, JObject originalConfig,
                                                   out BackTestingResult[] filteredResults)
         {
             try
             {
-                bool result = BackTestForCoin(programConfiguration.UnstableStakeCoin, unstableStake, programConfiguration.UnstableCoinWallet, true, filter, out BackTestingResult[] unstableResults);
+                bool result = BackTestForCoin(programConfiguration.UnstableStakeCoin, unstableStake, programConfiguration.UnstableCoinWallet, true, out BackTestingResult[] unstableResults);
                 filteredResults = unstableResults;
 
                 if (result)
                 {
-                    result = BackTestForCoin(programConfiguration.StableStakeCoin, stableStake, programConfiguration.StableCoinWallet, false, filter, out BackTestingResult[] stableResults);
+                    result = BackTestForCoin(programConfiguration.StableStakeCoin, stableStake, programConfiguration.StableCoinWallet, false, out BackTestingResult[] stableResults);
                     filteredResults = unstableResults.Concat(stableResults).ToArray();
                 }
 
@@ -523,7 +422,7 @@ namespace FreqtradeMetaStrategy
                                  .ToArray();
             }
 
-            bool BackTestForCoin(string coinId, Ticker[] tickers, double wallet, bool isUnstableStake, bool filter,
+            bool BackTestForCoin(string coinId, Ticker[] tickers, double wallet, bool isUnstableStake,
                                  out BackTestingResult[] tradingResults)
             {
                 if (tickers.Length == 0)
@@ -546,10 +445,6 @@ namespace FreqtradeMetaStrategy
                 ClassLogger.Information($"Filter and test found results.");
 
                 tradingResults = EvaluateBackTestingResults(output.ToString(), DefaultBackTestingTimeRange, strategies, isUnstableStake);
-                if (filter)
-                {
-                    tradingResults = FilterResults(tradingResults, programConfiguration);
-                }
                 return result;
             }
         }
@@ -609,7 +504,7 @@ namespace FreqtradeMetaStrategy
                                                ConfigCulture);
             double totalProfit = double.Parse(totalProfitMatch.Groups["profit"].Value,
                                               ConfigCulture);
-            double dailyProfit = Math.Pow(totalProfit/100,1.0/daysCount)-1;
+            double dailyProfit = Math.Pow((totalProfit/100)+1,1.0/daysCount)-1;
             return new BackTestingResult(strategyName, dailyProfit, tradesPerDay, pairProfits, isUnstableStake);
         }
 
@@ -624,7 +519,7 @@ namespace FreqtradeMetaStrategy
             return result;
         }
 
-        private static bool RetrieveTradingPairSets(ProgramConfiguration programConfiguration, bool getAll, out Ticker[] unstableStake, out Ticker[] stableStake)
+        private static bool RetrieveTradingPairSets(ProgramConfiguration programConfiguration, out Ticker[] unstableStake, out Ticker[] stableStake)
         {
             unstableStake = null;
             stableStake = null;
@@ -636,22 +531,10 @@ namespace FreqtradeMetaStrategy
                     return false;
                 }
 
-                if (getAll)
-                {
-                    unstableStake = FilteredTickers(programConfiguration.UnstableStakeCoin, tickers)
-                                   .ToArray();
-                    stableStake = FilteredTickers(programConfiguration.StableStakeCoin, tickers)
-                                 .ToArray();
-                }
-                else
-                {
-                    unstableStake = SortedAndFilteredTickers(programConfiguration.UnstableStakeCoin, tickers)
-                                   .Take(programConfiguration.MaxTradingPairs)
-                                   .ToArray();
-                    stableStake = SortedAndFilteredTickers(programConfiguration.StableStakeCoin, tickers)
-                                 .Take(programConfiguration.MaxTradingPairs)
-                                 .ToArray();
-                }
+                unstableStake = FilteredTickers(programConfiguration.UnstableStakeCoin, tickers)
+                   .ToArray();
+                stableStake = FilteredTickers(programConfiguration.StableStakeCoin, tickers)
+                   .ToArray();
                 ClassLogger.Information($"Found {tickers.Count(t => t.TargetId == programConfiguration.UnstableStakeCoin)} trading pairs for {programConfiguration.UnstableStakeCoin}");
                 ClassLogger.Verbose($"Chosen pairs for {programConfiguration.UnstableStakeCoin}");
                 foreach (Ticker ticker in unstableStake)
