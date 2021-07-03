@@ -7,13 +7,16 @@ namespace FreqtradeMetaStrategy
         public string StrategyName { get; }
         public double PredictedDailyProfit { get; }
         public double PredictedShortTermDailyProfit { get; }
+        public BackTestingResult BackTestingResult { get; }
         public int PredictedDaysToDoubleWallet => (int) (1 / PredictedDailyProfit);
 
-        public OptimizedStrategy(string strategyName, double predictedDailyProfit, double predictedShortTermDailyProfit)
+        public OptimizedStrategy(string strategyName, double predictedDailyProfit, double predictedShortTermDailyProfit,
+                                 BackTestingResult backTestingResult)
         {
             StrategyName = strategyName;
             PredictedDailyProfit = predictedDailyProfit;
             PredictedShortTermDailyProfit = predictedShortTermDailyProfit;
+            BackTestingResult = backTestingResult;
         }
 
         public override string ToString()

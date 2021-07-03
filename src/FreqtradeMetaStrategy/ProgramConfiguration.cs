@@ -29,7 +29,8 @@ namespace FreqtradeMetaStrategy
             "GodStra",
             "GodStraNew",
             "Supertrend",
-            "Zeus"
+            "Zeus",
+            "DoesNothingStrategy"
         };
     }
 }

@@ -26,6 +26,7 @@ namespace FreqtradeMetaStrategy
     //validate old results
     //consider trade volume based on wallet size/5
     //try strategy evaluation based on 6/3 days
+    //Zineszins formula for days to double wallet 
     internal static class StrategyOptimizer
     {
         private const string StrategyRepoLocation = "./user_data/strategies_source";
@@ -58,8 +59,9 @@ namespace FreqtradeMetaStrategy
             {
                 strategies = strategies.Intersect(options.Strategies).ToArray();
             }
+            ClassLogger.Information($"Found {strategies.Length} strategies.");
             
-            Ticker[] unstableStake = null, stableStake = null;
+            Ticker[] unstableStake = Array.Empty<Ticker>(), stableStake = Array.Empty<Ticker>();
             BackTestingResult[] testingResults = Array.Empty<BackTestingResult>();
             OptimizedStrategy[] optimized = Array.Empty<OptimizedStrategy>();
             if (result)
@@ -74,7 +76,7 @@ namespace FreqtradeMetaStrategy
 
             if (result)
             {
-                result = BatchBackTestAllStrategies(strategies.Intersect(options.Strategies).ToArray(), unstableStake, stableStake, programConfiguration, originalConfig,out testingResults);
+                result = BatchBackTestAllStrategies(strategies, unstableStake, stableStake, programConfiguration, originalConfig,out testingResults);
             }
 
             if (result)
@@ -82,10 +84,16 @@ namespace FreqtradeMetaStrategy
                 result = OptimizeStrategies(testingResults, programConfiguration, originalConfig, out optimized);
             }
 
-            ClassLogger.Information($"Results:");
+            ClassLogger.Information($"Results ({unstableStake.Length} unstable pairs|{stableStake.Length} stable pairs):");
             foreach (OptimizedStrategy strategy in optimized)
             {
                 ClassLogger.Information(strategy.ToString());
+                List<Ticker> sortedTickers =
+                    GetVolumeSortedTickers(strategy.BackTestingResult.IsUnstableStake ? unstableStake : stableStake);
+                foreach (Ticker ticker in strategy.BackTestingResult.PairsProfit.Select(pair => sortedTickers.First(t => t.ToTradingPairString() == pair.Key)))
+                {
+                    ClassLogger.Verbose($"{sortedTickers.IndexOf(ticker)} - {ticker}");
+                }
             }
             
             RestoreOriginalConfig();
@@ -109,6 +117,12 @@ namespace FreqtradeMetaStrategy
                 writeStream.SetLength(0);
                 using StreamWriter writer = new(writeStream, Encoding.Default);
                 writer.Write(originalConfig.ToString(Formatting.Indented));
+            }
+            
+            List<Ticker> GetVolumeSortedTickers(Ticker[] tickers)
+            {
+                return tickers.OrderByDescending(t => t.Volume)
+                              .ToList();
             }
         }
 
@@ -152,7 +166,7 @@ namespace FreqtradeMetaStrategy
 
                 StoreOptimizedConfig();
 
-                return new OptimizedStrategy(testingResult.Strategy, testingResult.ProfitPerDay, shortTermResult.ProfitPerDay);
+                return new OptimizedStrategy(testingResult.Strategy, testingResult.ProfitPerDay, shortTermResult.ProfitPerDay, testingResult);
 
                 void StoreOptimizedConfig()
                 {
@@ -471,6 +485,10 @@ namespace FreqtradeMetaStrategy
 
         private static BackTestingResult EvaluateBackTestingResult(string output, string strategyName, int daysCount, bool isUnstableStake)
         {
+            if (output.Contains("No trades made."))
+            {
+                return new BackTestingResult(strategyName, 0, 0, new Dictionary<string, double>(), isUnstableStake);
+            }
             List<string> outputSplit = output.Split(Environment.NewLine,
                                                     StringSplitOptions.TrimEntries |
                                                     StringSplitOptions.RemoveEmptyEntries)
@@ -772,7 +790,6 @@ namespace FreqtradeMetaStrategy
                                .TakeWhile(s => StrategyRecognizer.IsMatch(s))
                                .Except(programConfiguration.StrategyBlacklist)
                                .ToArray();
-            ClassLogger.Information($"Found {strategies.Length} strategies.");
             return result;
         }
 
