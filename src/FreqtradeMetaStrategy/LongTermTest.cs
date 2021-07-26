@@ -40,8 +40,10 @@ namespace FreqtradeMetaStrategy
         {
             DateTime startDate =
                 endDate - new TimeSpan(options.Interval * (intervalCount - completedIntervals) + 2, 0, 0, 0);
+            string endDateFormat = endDate.ToString("yyyyMMdd");
+            string startDateFormat = startDate.ToString("yyyyMMdd");
             bool result = ProcessFacade.Execute("freqtrade",
-                                                $"download-data --data-format-ohlcv hdf5 -t 5m 1h --timerange {startDate}-{endDate} -c {options.ConfigFile}");
+                                                $"download-data --data-format-ohlcv hdf5 -t 5m 1h --timerange {startDateFormat}-{endDateFormat} -c {options.ConfigFile}");
             if (!result)
             {
                 throw new InvalidOperationException(
