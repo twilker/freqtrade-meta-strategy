@@ -17,10 +17,10 @@ namespace FreqtradeMetaStrategy
         public int RateLimitTimeout { get; set; } = 70000;
         public int BackTestingPairsBatchSize { get; set; } = 10;
         public double MinimumTrustScore { get; set; } = 50;
-        public double MinimumDailyProfit { get; set; } = 0.005;
-        public double MinimumTradesPerDay { get; set; } = 1;
+        public double MinimumDailyProfit { get; set; } = 0;
+        public double MinimumTradesPerDay { get; set; } = 0;
         public int MaxStrategySuggestions { get; set; } = 5;
-        public int StrategyRunningDays { get; set; } = 3;
+        public int StrategyRunningDays { get; set; } = 30;
 
         public string[] StrategyBlacklist { get; set; } =
         {

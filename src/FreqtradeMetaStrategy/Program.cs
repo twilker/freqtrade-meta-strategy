@@ -31,8 +31,14 @@ namespace FreqtradeMetaStrategy
         //REST client: https://restsharp.dev/
         public static int Main(string[] args)
         {
-            return Parser.Default.ParseArguments<FindOptimizedStrategiesOptions, CreateConfigurationOptions>(args)
-                  .MapResult<FindOptimizedStrategiesOptions, CreateConfigurationOptions,int>(ExecuteFindStrategy, ExecuteCreateConfig, MapError);
+            return Parser.Default.ParseArguments<FindOptimizedStrategiesOptions, CreateConfigurationOptions, LongTermTestOptions>(args)
+                  .MapResult<FindOptimizedStrategiesOptions, CreateConfigurationOptions, LongTermTestOptions,int>(ExecuteFindStrategy, ExecuteCreateConfig, ExecuteLongTermTest, MapError);
+        }
+
+        private static int ExecuteLongTermTest(LongTermTestOptions arg)
+        {
+            ConfigureLogging(arg);
+            return LongTermTest.TestStrategy(arg) ? 0 : 1;
         }
 
         private static int MapError(IEnumerable<Error> errors)
@@ -79,6 +85,25 @@ namespace FreqtradeMetaStrategy
         
         [Option('s', "strategies", HelpText = "A list of strategies to optimize - this restricts the amount of strategies. It still considers the black list in the config.", Separator = ',')]
         public IEnumerable<string> Strategies { get; set; }
+    }
+
+    [Verb("long-term-test", HelpText="Make a long term test for a single strategy.")]
+    public class LongTermTestOptions : CommonOptions
+    {
+        [Option('c', "config", HelpText = "Path to the config file.", Required = true)]
+        public string ConfigFile { get; set; }
+        
+        [Option('s', "strategy", HelpText = "The strategy to test.", Required = true)]
+        public string Strategy { get; set; }
+        
+        [Option('t', "tag", HelpText = "Tag to identify run.", Required = true)]
+        public string Tag { get; set; }
+        
+        [Option('i', "interval", HelpText = "The interval in days.", Required = true)]
+        public int Interval { get; set; }
+        
+        [Option('r', "time-range", HelpText = "The whole time range.", Required = true)]
+        public int TimeRange { get; set; }
     }
 
     public class CommonOptions

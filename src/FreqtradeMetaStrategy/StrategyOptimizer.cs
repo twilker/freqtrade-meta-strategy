@@ -32,24 +32,16 @@ namespace FreqtradeMetaStrategy
         private const string StrategyRepoLocation = "./user_data/strategies_source";
         private const string StrategyRepoStrategiesLocation = "./user_data/strategies_source/user_data/strategies";
         private const string StrategiesAppLocation = "./user_data/strategies";
-        private const int DefaultBackTestingTimeRange = 30;
+        private const int DefaultBackTestingTimeRange = 3;
         private static readonly ILogger ClassLogger = Log.ForContext(typeof(StrategyOptimizer));
         private static readonly Regex StrategyRecognizer = new(@"^\w\S*$", RegexOptions.Compiled);
         private static readonly Regex PaginationLinks = new(@"\<(?<link>[^\>]*)\>;\s*rel=""(?<type>[^""]*)""", RegexOptions.Compiled);
-        private static readonly Regex BackTestingTradesPerDay = new(@"^\|\s*Trades per day\s*\|\s*(?<trades>\d+(?:\.\d+)).*\|$", RegexOptions.Compiled);
-        private static readonly Regex BackTestingTotalProfit = new(@"^\|\s*Total profit %\s*\|\s*(?<profit>-?\d+(?:\.\d+)).*\|$", RegexOptions.Compiled);
-        private static readonly Regex Stoploss = new(@"stoploss\s*=\s*(?<stoploss>-?\d+(?:\.\d+))", RegexOptions.Compiled);
+        private static readonly Regex Stoploss = new(@"stoploss\s*=\s*(?<stoploss>-?\d+(?:\.\d+)?)", RegexOptions.Compiled);
         private static readonly Regex TrailingStop = new(@"trailing_stop\s*=\s*(?<trailing_stop>True|False)", RegexOptions.Compiled);
-        private static readonly Regex TrailingStopPositive = new(@"trailing_stop_positive\s*=\s*(?<trailing_stop_positive>-?\d+(?:\.\d+))", RegexOptions.Compiled);
-        private static readonly Regex TrailingStopPositiveOffset = new(@"trailing_stop_positive_offset\s*=\s*(?<trailing_stop_positive_offset>-?\d+(?:\.\d*))", RegexOptions.Compiled);
+        private static readonly Regex TrailingStopPositive = new(@"trailing_stop_positive\s*=\s*(?<trailing_stop_positive>-?\d+(?:\.\d+)?)", RegexOptions.Compiled);
+        private static readonly Regex TrailingStopPositiveOffset = new(@"trailing_stop_positive_offset\s*=\s*(?<trailing_stop_positive_offset>-?\d+(?:\.\d*)?)", RegexOptions.Compiled);
         private static readonly Regex TrailingOnlyOffsetIsReached = new(@"trailing_only_offset_is_reached\s*=\s*(?<trailing_only_offset_is_reached>True|False)", RegexOptions.Compiled);
-        private static readonly Regex BackTestingPairProfit =
-            new(
-                @"^\|\s*(?<pair>[A-Z]*\/[A-Z]*)\s*\|[^\|]*\|[^\|]*\|[^\|]*\|[^\|]*\|\s*(?<total_profit>-?\d+(?:\.\d+)).*\|$"
-              , RegexOptions.Compiled);
 
-        private static readonly CultureInfo ConfigCulture = CultureInfo.GetCultureInfo("en-US");
-        
         public static int Optimize(FindOptimizedStrategiesOptions options)
         {
             ProgramConfiguration programConfiguration = ParseConfiguration(options);
@@ -307,9 +299,8 @@ namespace FreqtradeMetaStrategy
                     $"Unexpected failure of back testing already tested strategy {testingResult.Strategy}.");
             }
 
-            BackTestingResult newResult =
-                EvaluateBackTestingResult(output.ToString(), testingResult.Strategy,
-                                          DefaultBackTestingTimeRange, testingResult.IsUnstableStake);
+            BackTestingResult newResult = ToolBox.EvaluateBackTestingResult(output.ToString(), testingResult.Strategy,
+                                                                       DefaultBackTestingTimeRange, testingResult.IsUnstableStake);
             return newResult;
         }
 
@@ -390,7 +381,7 @@ namespace FreqtradeMetaStrategy
                         continue;
                     }
 
-                    testResults.Add(EvaluateBackTestingResult(output.ToString(), strategy, DefaultBackTestingTimeRange, true));
+                    testResults.Add(ToolBox.EvaluateBackTestingResult(output.ToString(), strategy, DefaultBackTestingTimeRange, true));
                 }
 
                 return true;
@@ -432,7 +423,7 @@ namespace FreqtradeMetaStrategy
             
             BackTestingResult[] EvaluateBackTestingResults(string output, int daysCount, IEnumerable<string> strategies, bool isUnstableStake)
             {
-                return strategies.Select(s => EvaluateBackTestingResult(output, s, daysCount, isUnstableStake))
+                return strategies.Select(s => ToolBox.EvaluateBackTestingResult(output, s, daysCount, isUnstableStake))
                                  .ToArray();
             }
 
@@ -481,49 +472,6 @@ namespace FreqtradeMetaStrategy
             using StreamWriter writer = new(fileStream, Encoding.Default);
             writer.Write(config.ToString(Formatting.Indented));
             return config;
-        }
-
-        private static BackTestingResult EvaluateBackTestingResult(string output, string strategyName, int daysCount, bool isUnstableStake)
-        {
-            if (output.Contains("No trades made."))
-            {
-                return new BackTestingResult(strategyName, 0, 0, new Dictionary<string, double>(), isUnstableStake);
-            }
-            List<string> outputSplit = output.Split(Environment.NewLine,
-                                                    StringSplitOptions.TrimEntries |
-                                                    StringSplitOptions.RemoveEmptyEntries)
-                                             .ToList();
-            int startResultLine = outputSplit.IndexOf($"Result for strategy {strategyName}");
-            if (startResultLine < 0)
-            {
-                throw new InvalidOperationException(
-                    $"The below output does not contain the expected line 'Result for strategy {strategyName}'{Environment.NewLine}{output}");
-            }
-
-            int current = startResultLine + 4;
-            Match pairLineMatch = BackTestingPairProfit.Match(outputSplit[current]);
-            Dictionary<string, double> pairProfits = new();
-            while (pairLineMatch.Success)
-            {
-                pairProfits.Add(pairLineMatch.Groups["pair"].Value,
-                                double.Parse(pairLineMatch.Groups["total_profit"].Value,
-                                             ConfigCulture));
-                current++;
-                pairLineMatch = BackTestingPairProfit.Match(outputSplit[current]);
-            }
-
-            Match tradesPerDayMatch = outputSplit.Skip(startResultLine)
-                                                 .Select(l => BackTestingTradesPerDay.Match(l))
-                                                 .First(m => m.Success);
-            Match totalProfitMatch = outputSplit.Skip(startResultLine)
-                                                .Select(l => BackTestingTotalProfit.Match(l))
-                                                .First(m => m.Success);
-            double tradesPerDay = double.Parse(tradesPerDayMatch.Groups["trades"].Value,
-                                               ConfigCulture);
-            double totalProfit = double.Parse(totalProfitMatch.Groups["profit"].Value,
-                                              ConfigCulture);
-            double dailyProfit = Math.Pow((totalProfit/100)+1,1.0/daysCount)-1;
-            return new BackTestingResult(strategyName, dailyProfit, tradesPerDay, pairProfits, isUnstableStake);
         }
 
         private static bool DownloadDataForBackTesting(Ticker[] unstableBase, Ticker[] stableBase)
@@ -686,7 +634,7 @@ namespace FreqtradeMetaStrategy
                     CoingeckoTickers result = JsonConvert.DeserializeObject<CoingeckoTickers>(response.Content,
                         new JsonSerializerSettings
                         {
-                            Culture = ConfigCulture
+                            Culture = ToolBox.ConfigCulture
                         });
                     tickers.AddRange(result?.Tickers ?? Enumerable.Empty<Ticker>());
                     nextLink = (response.Headers.FirstOrDefault(p => p.Name == "Link")

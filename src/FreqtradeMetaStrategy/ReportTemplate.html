@@ -1,0 +1,75 @@
+<!DOCTYPE HTML>
+<html>
+<head>  
+  <script type="text/javascript">
+  window.onload = function () {
+    var chart = new CanvasJS.Chart("chartContainer",
+    {
+      title:{
+      text: "Long Term Test For Strategy $(StrategyName)"  
+      }, 
+      zoomEnabled: true,
+      axisY:{
+          prefix: "% "
+      },
+        legend: {
+            cursor: "pointer",
+            itemclick: function (e) {
+                if (typeof (e.dataSeries.visible) === "undefined" || e.dataSeries.visible) {
+                    e.dataSeries.visible = false;
+                } else {
+                    e.dataSeries.visible = true;
+                }
+
+                e.chart.render();
+            }
+        },
+      data: [
+         $(TotalResult)
+      ]
+    });
+
+    chart.render();
+	
+	var hideChart = new CanvasJS.Chart("hideChartContainer", {
+        title: {
+          text: "Profits Per Trading Pair"
+        },
+        zoomEnabled: true,
+        axisY:{
+            prefix: "% "
+        },
+        legend: {
+            cursor: "pointer",
+            itemclick: function (e) {
+                if (typeof (e.dataSeries.visible) === "undefined" || e.dataSeries.visible) {
+                    e.dataSeries.visible = false;
+                } else {
+                    e.dataSeries.visible = true;
+                }
+
+                e.chart.render();
+            }
+        },
+        data: [
+            $(PairProfit)
+        ]
+    });
+
+    hideChart.render();
+  }
+  </script>
+ <script type="text/javascript" src="https://canvasjs.com/assets/script/canvasjs.min.js"></script>
+    <style>
+      div {
+        margin: 0px 0px 40px 0px;
+      }
+    </style>
+ </head>
+<body>
+  <div id="chartContainer" style="height: 300px; max-width: 920px; margin: 0px auto;">
+  </div>
+  <div id="hideChartContainer" style="height: 300px; max-width: 920px; margin: 0px auto;">
+  </div>
+</body>
+</html>
