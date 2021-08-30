@@ -18,7 +18,10 @@ namespace FreqtradeMetaStrategy
             LongTermResult lastResult = GetLastResult(options, resultFile);
             DateTime lastStartDate = GetLastStartDate(lastResult, out int completedIntervals);
             int intervalCount = (int) Math.Ceiling((double) options.TimeRange / options.Interval);
-            DownloadHistoryData(lastStartDate, completedIntervals, intervalCount, options);
+            if (completedIntervals <= intervalCount)
+            {
+                DownloadHistoryData(lastStartDate, completedIntervals, intervalCount, options);
+            }
             while (completedIntervals <= intervalCount)
             {
                 DateTime endDate = lastStartDate - new TimeSpan(1, 0, 0, 0);
@@ -39,7 +42,7 @@ namespace FreqtradeMetaStrategy
                                                 LongTermTestOptions options)
         {
             DateTime startDate =
-                endDate - new TimeSpan(options.Interval * (intervalCount - completedIntervals) + 2, 0, 0, 0);
+                endDate - new TimeSpan(options.Interval * (intervalCount - completedIntervals) + 20, 0, 0, 0);
             string endDateFormat = endDate.ToString("yyyyMMdd");
             string startDateFormat = startDate.ToString("yyyyMMdd");
             bool result = ProcessFacade.Execute("freqtrade",
