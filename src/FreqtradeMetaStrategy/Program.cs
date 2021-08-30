@@ -31,8 +31,14 @@ namespace FreqtradeMetaStrategy
         //REST client: https://restsharp.dev/
         public static int Main(string[] args)
         {
-            return Parser.Default.ParseArguments<FindOptimizedStrategiesOptions, CreateConfigurationOptions, LongTermTestOptions>(args)
-                  .MapResult<FindOptimizedStrategiesOptions, CreateConfigurationOptions, LongTermTestOptions,int>(ExecuteFindStrategy, ExecuteCreateConfig, ExecuteLongTermTest, MapError);
+            return Parser.Default.ParseArguments<FindOptimizedStrategiesOptions, CreateConfigurationOptions, LongTermTestOptions, BlacklistOptimizationOptions>(args)
+                  .MapResult<FindOptimizedStrategiesOptions, CreateConfigurationOptions, LongTermTestOptions, BlacklistOptimizationOptions,int>(ExecuteFindStrategy, ExecuteCreateConfig, ExecuteLongTermTest, ExecuteBlacklistOptimization, MapError);
+        }
+
+        private static int ExecuteBlacklistOptimization(BlacklistOptimizationOptions arg)
+        {
+            ConfigureLogging(arg);
+            return BlacklistOptimization.GenerateOptimalBlacklist(arg) ? 0 : 1;
         }
 
         private static int ExecuteLongTermTest(LongTermTestOptions arg)
@@ -93,6 +99,22 @@ namespace FreqtradeMetaStrategy
         [Option('c', "config", HelpText = "Path to the config file.", Required = true)]
         public string ConfigFile { get; set; }
         
+        [Option('s', "strategy", HelpText = "The strategy to test.", Required = true)]
+        public string Strategy { get; set; }
+        
+        [Option('t', "tag", HelpText = "Tag to identify run.", Required = true)]
+        public string Tag { get; set; }
+        
+        [Option('i', "interval", HelpText = "The interval in days.", Required = true)]
+        public int Interval { get; set; }
+        
+        [Option('r', "time-range", HelpText = "The whole time range.", Required = true)]
+        public int TimeRange { get; set; }
+    }
+
+    [Verb("blacklist-optimization", HelpText="Generate an optimized blacklist for a single strategy.")]
+    public class BlacklistOptimizationOptions : CommonOptions
+    {
         [Option('s', "strategy", HelpText = "The strategy to test.", Required = true)]
         public string Strategy { get; set; }
         
