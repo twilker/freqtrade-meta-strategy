@@ -110,6 +110,9 @@ namespace FreqtradeMetaStrategy
         
         [Option('r', "time-range", HelpText = "The whole time range.", Required = true)]
         public int TimeRange { get; set; }
+        
+        [Option("skip-download", HelpText = "Skips the download.")]
+        public bool SkipDownload { get; set; }
     }
 
     [Verb("blacklist-optimization", HelpText="Generate an optimized blacklist for a single strategy.")]

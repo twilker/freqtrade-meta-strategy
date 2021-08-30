@@ -18,7 +18,7 @@ namespace FreqtradeMetaStrategy
             LongTermResult lastResult = GetLastResult(options, resultFile);
             DateTime lastStartDate = GetLastStartDate(lastResult, out int completedIntervals);
             int intervalCount = (int) Math.Ceiling((double) options.TimeRange / options.Interval);
-            if (completedIntervals <= intervalCount)
+            if (completedIntervals <= intervalCount && !options.SkipDownload)
             {
                 DownloadHistoryData(lastStartDate, completedIntervals, intervalCount, options);
             }
@@ -77,9 +77,9 @@ namespace FreqtradeMetaStrategy
                 StringBuilder marketContent = StartChart("Market Change", true);
                 foreach (IntervalResult intervalResult in lastResult.Results)
                 {
-                    AddData(profitContent, intervalResult.EndDate, intervalResult.Profit);
-                    AddData(drawDownContent, intervalResult.EndDate, intervalResult.DrawDown);
-                    AddData(marketContent, intervalResult.EndDate, intervalResult.MarketChange);
+                    AddData(profitContent, intervalResult.StartDate, intervalResult.Profit);
+                    AddData(drawDownContent, intervalResult.StartDate, intervalResult.DrawDown);
+                    AddData(marketContent, intervalResult.StartDate, intervalResult.MarketChange);
                 }
                 EndChart(profitContent);
                 EndChart(drawDownContent);
@@ -96,7 +96,7 @@ namespace FreqtradeMetaStrategy
                 {
                     foreach (string key in pairsProfitBuilders.Keys)
                     {
-                        AddData(pairsProfitBuilders[key], intervalResult.EndDate,
+                        AddData(pairsProfitBuilders[key], intervalResult.StartDate,
                                 intervalResult.Pairs.FirstOrDefault(p => p.Pair == key)?.Profit ?? 0);
                     }
                 }
