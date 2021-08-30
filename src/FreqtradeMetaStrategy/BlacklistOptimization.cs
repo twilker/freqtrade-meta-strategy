@@ -42,7 +42,124 @@ namespace FreqtradeMetaStrategy
                 lastResult.EndDate = endDate;
                 SaveResult(lastResult, resultFile);
             }
+
+            DeployStaticConfig(configFile);
+            BlacklistOptimizationPairsPartitionResult pairsChunk = GetNextPairsChunk(options, lastResult);
+            SaveResult(lastResult, resultFile);
+            while (pairsChunk!= null)
+            {
+                RunTests(pairsChunk, options, configFile, lastResult.EndDate, 
+                         () => SaveResult(lastResult, resultFile));
+                pairsChunk = GetNextPairsChunk(options, lastResult);
+                SaveResult(lastResult, resultFile);
+            }
             return true;
+        }
+
+        private static void RunTests(BlacklistOptimizationPairsPartitionResult pairsChunk,
+                                     BlacklistOptimizationOptions options, string configFile,
+                                     DateTime endDate, Action persistAction)
+        {
+            DateTime lastStartDate = GetLastStartDate(pairsChunk, endDate, out int completedIntervals);
+            int intervalCount = (int) Math.Ceiling((double) options.TimeRange / options.Interval);
+            
+            while (completedIntervals <= intervalCount)
+            {
+                endDate = lastStartDate - new TimeSpan(1, 0, 0, 0);
+                DateTime startDate = endDate - new TimeSpan(options.Interval,0,0,0);
+                string endDateFormat = endDate.ToString("yyyyMMdd");
+                string startDateFormat = startDate.ToString("yyyyMMdd");
+                BackTestingResult result = BackTestInterval(options, endDateFormat, startDateFormat, configFile,
+                                                            pairsChunk);
+                UpdateResult(pairsChunk, result, persistAction, startDateFormat, endDateFormat);
+                lastStartDate = startDate;
+                completedIntervals++;
+            }
+        }
+
+        private static void UpdateResult(BlacklistOptimizationPairsPartitionResult lastResult, BackTestingResult result, Action persistAction,
+                                         string startDate, string endDate)
+        {
+            IntervalResult intervalResult = new()
+            {
+                Profit = result.TotalProfit,
+                DrawDown = result.DrawDown,
+                MarketChange = result.MarketChange,
+                StartDate = startDate,
+                EndDate = endDate,
+                Pairs = result.PairsProfit
+                              .Select(kv => new PairProfit
+                               {
+                                   Pair = kv.Key,
+                                   Profit = kv.Value
+                               })
+                              .ToArray()
+            };
+            lastResult.Results = lastResult.Results.Concat(new[] {intervalResult})
+                                           .ToArray();
+            persistAction();
+        }
+
+        private static BackTestingResult BackTestInterval(BlacklistOptimizationOptions options, string endDate,
+                                                          string startDate, string configFile,
+                                                          BlacklistOptimizationPairsPartitionResult
+                                                              lastResult)
+        {
+            string pairs = string.Join(" ", lastResult.PairList);
+            bool result = ProcessFacade.Execute("freqtrade",
+                                                $"backtesting --data-format-ohlcv hdf5  --timerange {startDate}-{endDate} -s {options.Strategy} -c {configFile} -p {pairs}",
+                                                out StringBuilder output);
+            if (!result)
+            {
+                throw new InvalidOperationException(
+                    $"Unexpected failure of back testing strategy {options.Strategy}.");
+            }
+
+            BackTestingResult newResult = ToolBox.EvaluateBackTestingResult(output.ToString(), options.Strategy, options.Interval, false);
+            return newResult;
+        }
+
+        private static DateTime GetLastStartDate(BlacklistOptimizationPairsPartitionResult lastResult, DateTime endDate, out int completedIntervals)
+        {
+            completedIntervals = 0;
+            if (!lastResult.Results.Any())
+            {
+                return endDate;
+            }
+
+            completedIntervals = lastResult.Results.Length;
+            string date = lastResult.Results.Last().StartDate;
+            return new DateTime(int.Parse(date[new Range(0,4)]),
+                                int.Parse(date[new Range(4,6)]),
+                                int.Parse(date[new Range(6,8)]));
+        }
+
+        private static BlacklistOptimizationPairsPartitionResult GetNextPairsChunk(BlacklistOptimizationOptions options, BlacklistOptimizationResult lastResult)
+        {
+            BlacklistOptimizationPairsPartitionResult last = lastResult.Results?.LastOrDefault();
+            if (last?.Completed == false)
+            {
+                return last;
+            }
+
+            int startIndex = lastResult.Results?.Sum(r => r.PairList.Length) ?? 0;
+            int batchSize = startIndex+options.PairsPartition < lastResult.AllPairs.Length
+                                ? options.PairsPartition
+                                : lastResult.AllPairs.Length - startIndex;
+            string[] batch = batchSize > 0
+                                 ? lastResult.AllPairs.AsSpan(startIndex, batchSize).ToArray()
+                                 : Array.Empty<string>();
+            if (!batch.Any())
+            {
+                return null;
+            }
+
+            BlacklistOptimizationPairsPartitionResult result = new BlacklistOptimizationPairsPartitionResult { PairList = batch };
+            lastResult.Results = (lastResult.Results
+                                  ?? Enumerable.Empty<BlacklistOptimizationPairsPartitionResult>())
+                                .Concat(new[] { result })
+                                .ToArray();
+            return result;
         }
 
         private static DateTime DownloadData(BlacklistOptimizationOptions options, BlacklistOptimizationResult lastResult, string configFile)
@@ -94,9 +211,19 @@ namespace FreqtradeMetaStrategy
             lastResult.AllPairs = pairs.ToArray();
         }
 
+        private static void DeployStaticConfig(string configFile)
+        {
+            DeployResource(configFile, "FreqtradeMetaStrategy.blacklist-template-static-config.json");
+        }
+
         private static void DeployConfig(string configFile)
         {
-            FileInfo fileInfo = new(configFile);
+            DeployResource(configFile, "FreqtradeMetaStrategy.blacklist-template-config.json");
+        }
+
+        private static void DeployResource(string file, string resource)
+        {
+            FileInfo fileInfo = new(file);
             if (!fileInfo.Directory?.Exists != true)
             {
                 fileInfo.Directory?.Create();
@@ -108,11 +235,11 @@ namespace FreqtradeMetaStrategy
             }
 
             using Stream resourceStream = Assembly.GetExecutingAssembly()
-                                                  .GetManifestResourceStream("FreqtradeMetaStrategy.blacklist-template-config.json");
+                                                  .GetManifestResourceStream(resource);
             using Stream fileStream = fileInfo.OpenWrite();
             if (resourceStream == null)
             {
-                throw new InvalidOperationException("config template not found.");
+                throw new InvalidOperationException($"resource \"{resource}\" not found. Available: {string.Join("; ", Assembly.GetExecutingAssembly().GetManifestResourceNames())}");
             }
             resourceStream.CopyTo(fileStream);
         }

@@ -16,6 +16,7 @@
     </ItemGroup>
 
     <ItemGroup>
+      <EmbeddedResource Include="blacklist-template-static-config.json" />
       <EmbeddedResource Include="ReportTemplate.html" />
       <None Remove="blacklist-template-config.json" />
       <EmbeddedResource Include="blacklist-template-config.json" />

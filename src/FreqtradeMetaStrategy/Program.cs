@@ -126,6 +126,9 @@ namespace FreqtradeMetaStrategy
         
         [Option('r', "time-range", HelpText = "The whole time range.", Required = true)]
         public int TimeRange { get; set; }
+        
+        [Option('p', "pairs-partition", HelpText = "Number of pairs to run in one interval.", Required = true)]
+        public int PairsPartition { get; set; }
     }
 
     public class CommonOptions

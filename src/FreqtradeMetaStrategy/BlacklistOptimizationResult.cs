@@ -13,5 +13,6 @@ namespace FreqtradeMetaStrategy
         public bool DataDownloaded { get; set; }
         public string[] AllPairs { get; set; }
         public DateTime EndDate { get; set; }
+        public BlacklistOptimizationPairsPartitionResult[] Results { get; set; }
     }
 }

@@ -1,0 +1,82 @@
+{
+    "max_open_trades": 1,
+    "stake_currency": "USDT",
+    "stake_amount": "unlimited",
+    "dry_run_wallet": 500.0,
+    "tradable_balance_ratio": 0.99,
+    "fiat_display_currency": "EUR",
+    "dry_run": true,
+    "cancel_open_orders_on_exit": false,
+    "unfilledtimeout": {
+        "buy": 10,
+        "sell": 30,
+        "unit": "minutes"
+    },
+    "order_types": {
+      "buy": "market",
+      "sell": "market",
+      "emergencysell": "market",
+      "forcebuy": "market",
+      "forcesell": "market",
+      "stoploss": "market",
+      "stoploss_on_exchange": false,
+      "stoploss_on_exchange_interval": 60
+    },
+    "bid_strategy": {
+        "price_side": "ask",
+        "ask_last_balance": 0.0,
+        "use_order_book": true,
+        "order_book_top": 1,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "ask_strategy": {
+        "price_side": "bid",
+        "use_order_book": true,
+        "order_book_top": 1,
+    },
+    "exchange": {
+        "name": "binance",
+        "key": "",
+        "secret": "",
+        "ccxt_config": {"enableRateLimit": true},
+        "ccxt_async_config": {
+            "enableRateLimit": true,
+            "rateLimit": 200
+        },
+        "pair_whitelist": [
+        ],
+        "pair_blacklist": [
+            "BNB/BTC",
+            "BNB/BUSD",
+            "BNB/ETH",
+            "BNB/EUR",
+            "BNB/NGN",
+            "BNB/PAX",
+            "BNB/RUB",
+            "BNB/TRY",
+            "BNB/TUSD",
+            "BNB/USDC",
+            "BNB/USDS",
+            "BNB/USDT",			
+            "BUSD/USDT",
+            "EPS/USDT",
+            ".*BEAR/USDT",
+            ".*BULL/USDT",
+            ".*UP/USDT",
+            ".*DOWN/USDT",
+            ".*HEDGE/USDT",
+            "USDC/USDT",
+            "EUR/USDT",
+            "GBP/USDT",
+            "TUSD/USDT",
+        ]
+    },
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ]
+}
