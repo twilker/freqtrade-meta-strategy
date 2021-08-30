@@ -26,6 +26,8 @@ namespace FreqtradeMetaStrategy
         public static bool GenerateOptimalBlacklist(BlacklistOptimizationOptions options)
         {
             string resultFile = Path.Combine(ResultFolder, $"{options.Tag}-result.json");
+            string blacklistReport = Path.Combine(ResultFolder, $"{options.Tag}-blacklist-report.html");
+            string greenReport = Path.Combine(ResultFolder, $"{options.Tag}-green-report.html");
             string configFile = Path.Combine(ResultFolder, $"{options.Tag}-config.json");
             BlacklistOptimizationResult lastResult = GetLastResult(options, resultFile);
             DeployConfig(configFile);
@@ -53,7 +55,127 @@ namespace FreqtradeMetaStrategy
                 pairsChunk = GetNextPairsChunk(options, lastResult);
                 SaveResult(lastResult, resultFile);
             }
+
+            if (lastResult.Blacklist == null)
+            {
+                RuleBasedBlacklistGeneration(lastResult);
+                SaveResult(lastResult, resultFile);
+            }
+            
+            GenerateReport(lastResult, lastResult.Blacklist, blacklistReport, options);
+            GenerateReport(lastResult, lastResult.AllPairs.Except(lastResult.Blacklist).ToArray(), greenReport, options);
+            ClassLogger.Information($"Found {lastResult.Blacklist.Length} blacklisted pairs. Happy trading ^^.");
             return true;
+        }
+
+        private static void GenerateReport(BlacklistOptimizationResult lastResult, string[] pairsForReport, string file,
+                                           BlacklistOptimizationOptions options)
+        {
+            using Stream embeddedStream = Assembly.GetExecutingAssembly()
+                                                   .GetManifestResourceStream("FreqtradeMetaStrategy.BlacklistReportTemplate.html");
+            if (embeddedStream == null)
+            {
+                throw new InvalidOperationException("Report template not found.");
+            }
+            using StreamReader reportTemplateStream = new(embeddedStream);
+            string content = reportTemplateStream.ReadToEnd()
+                                                 .Replace("$(StrategyName)", options.Strategy)
+                                                 .Replace("$(PairProfit)", GeneratePairsChartData());
+            File.WriteAllText(file, content, Encoding.UTF8);
+
+            string GeneratePairsChartData()
+            {
+                Dictionary<string, StringBuilder> pairsProfitBuilders = StartPairsProfitCharts();
+                foreach (string pair in pairsForReport)
+                {
+                    foreach ((string date, double value) in GetHistory(pair, lastResult))
+                    {
+                        AddData(pairsProfitBuilders[pair], date, value);
+                    }
+                }
+                foreach (StringBuilder chartData in pairsProfitBuilders.Values)
+                {
+                    EndChart(chartData);
+                }
+
+                return string.Join($",{Environment.NewLine}", pairsProfitBuilders.Values);
+            }
+
+            StringBuilder StartChart(string title, bool visible)
+            {
+                StringBuilder chartData = new();
+                chartData.AppendLine("{");
+                chartData.AppendLine("showInLegend: true,");
+                chartData.AppendLine("type: \"line\",");
+                chartData.AppendLine($"name: \"{title}\",");
+                chartData.AppendLine($"visible: {(visible?"true":"false")},");
+                chartData.AppendLine("toolTipContent: \"{name} - {x}: {y}%\",");
+                chartData.AppendLine("dataPoints: [");
+                return chartData;
+            }
+
+            void EndChart(StringBuilder chartData)
+            {
+                chartData.AppendLine("]");
+                chartData.AppendLine("}");
+            }
+            
+            void AddData(StringBuilder chartData, string date, double value)
+            {
+                chartData.AppendLine(
+                    $"{{ x: new Date({date[new Range(0, 4)]}, {date[new Range(4, 6)]}, {date[new Range(6, 8)]}), y: {value} }},");
+            }
+            
+            Dictionary<string, StringBuilder> StartPairsProfitCharts()
+            {
+                return pairsForReport.ToDictionary(p => p, p => StartChart(p, false));
+            }
+        }
+
+        private static void RuleBasedBlacklistGeneration(BlacklistOptimizationResult result)
+        {
+            List<string> blacklist = new();
+            foreach (string pair in result.AllPairs)
+            {
+                ClassLogger.Information($"Evaluate {pair}");
+                HistoryData[] values = GetHistory(pair, result);
+                if (IsOverallNegative(values) ||
+                    HasBiggerNegativeThenPositive(values) ||
+                    MoreThanTwiceNegative(values))
+                {
+                    blacklist.Add(pair);
+                }
+            }
+
+            result.Blacklist = blacklist.ToArray();
+            
+            bool IsOverallNegative(HistoryData[] values)
+            {
+                return values.Sum(v => v.Value) < 0;
+            }
+            
+            bool HasBiggerNegativeThenPositive(HistoryData[] values)
+            {
+                double min = values.Min(v => v.Value);
+                double max = values.Max(v => v.Value);
+                return min < 0 &&
+                       Math.Abs(min) > 3 * max;
+            }
+            
+            bool MoreThanTwiceNegative(HistoryData[] values)
+            {
+                return values.Count(v => v.Value < 0) >
+                       2 * values.Count(v => v.Value > 0);
+            }
+        }
+
+        private record HistoryData(string Date, double Value);
+
+        private static HistoryData[] GetHistory(string pair, BlacklistOptimizationResult result)
+        {
+            return result.Results.First(r => r.PairList.Contains(pair))
+                         .Results.Select(i => new HistoryData(i.StartDate, i.Pairs.FirstOrDefault(p => p.Pair == pair)?.Profit??0))
+                         .ToArray();
         }
 
         private static void RunTests(BlacklistOptimizationPairsPartitionResult pairsChunk,
@@ -75,6 +197,9 @@ namespace FreqtradeMetaStrategy
                 lastStartDate = startDate;
                 completedIntervals++;
             }
+
+            pairsChunk.Completed = true;
+            persistAction();
         }
 
         private static void UpdateResult(BlacklistOptimizationPairsPartitionResult lastResult, BackTestingResult result, Action persistAction,
