@@ -15,5 +15,6 @@ namespace FreqtradeMetaStrategy
         public DateTime EndDate { get; set; }
         public BlacklistOptimizationPairsPartitionResult[] Results { get; set; }
         public string[] Blacklist { get; set; }
+        public StrategyPerformance Performance { get; set; }
     }
 }

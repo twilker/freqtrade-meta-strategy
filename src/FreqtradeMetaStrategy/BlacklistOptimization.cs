@@ -28,6 +28,7 @@ namespace FreqtradeMetaStrategy
             string resultFile = Path.Combine(ResultFolder, $"{options.Tag}-result.json");
             string blacklistReport = Path.Combine(ResultFolder, $"{options.Tag}-blacklist-report.html");
             string greenReport = Path.Combine(ResultFolder, $"{options.Tag}-green-report.html");
+            string performanceReport = Path.Combine(ResultFolder, $"{options.Tag}-performance-report.html");
             string configFile = Path.Combine(ResultFolder, $"{options.Tag}-config.json");
             BlacklistOptimizationResult lastResult = GetLastResult(options, resultFile);
             DeployConfig(configFile);
@@ -61,27 +62,68 @@ namespace FreqtradeMetaStrategy
                 RuleBasedBlacklistGeneration(lastResult);
                 SaveResult(lastResult, resultFile);
             }
+
+            lastResult.Performance ??= new StrategyPerformance
+            {
+                Unfiltered = CalculatePerformance(),
+                Filtered = CalculateFixedPerformance(),
+                Overall = CalculateOverallPerformance()
+            };
             
             GenerateReport(lastResult, lastResult.Blacklist, blacklistReport, options);
             GenerateReport(lastResult, lastResult.AllPairs.Except(lastResult.Blacklist).ToArray(), greenReport, options);
-            ClassLogger.Information($"Found {lastResult.Blacklist.Length} blacklisted pairs. Happy trading ^^.");
+            GeneratePerformanceReport(lastResult, performanceReport, options);
+            ClassLogger.Information($"Found {lastResult.Blacklist.Length} blacklisted pairs. Performance of the strategy {options.Strategy} is: Top {options.PairsPartition} - {lastResult.Performance.Unfiltered*100:F2}% | All - {lastResult.Performance.Overall*100:F2}% | Blacklisted Top {options.PairsPartition} - {lastResult.Performance.Filtered*100:F2}%. Happy trading ^^.");
             return true;
+
+            double CalculatePerformance()
+            {
+                double market = lastResult.Results[0].Results.Sum(r => r.MarketChange);
+                double profit = lastResult.Results[0].Results.Sum(r => r.Profit);
+                return profit / market;
+            }
+
+            double CalculateFixedPerformance()
+            {
+                double market = lastResult.Results[0].Results.Sum(r => r.MarketChange);
+                double profit = lastResult.Results.SelectMany(r => r.Results)
+                                          .SelectMany(r => r.Pairs)
+                                          .Where(p => !lastResult.Blacklist.Contains(p.Pair))
+                                          .Sum(p => p.Profit);
+                return profit / market;
+            }
+
+            double CalculateOverallPerformance()
+            {
+                double market = lastResult.Results.SelectMany(r => r.Results).Sum(r => r.MarketChange);
+                double profit = lastResult.Results.SelectMany(r => r.Results).Sum(r => r.Profit);
+                return profit / market;
+            }
+        }
+
+        private static void GeneratePerformanceReport(BlacklistOptimizationResult lastResult, string performanceReport, BlacklistOptimizationOptions options)
+        {
+            WriteReport(performanceReport, options, GeneratePerformanceChart());
+            
+            string GeneratePerformanceChart()
+            {
+                StringBuilder profit = StartChart("Profit", true);
+                StringBuilder market = StartChart("Market Change", true);
+                foreach (IntervalResult result in lastResult.Results[0].Results)
+                {
+                    AddData(profit, result.StartDate, result.Profit);
+                    AddData(market, result.StartDate, result.MarketChange);
+                }
+                EndChart(profit);
+                EndChart(market);
+                return profit + "," + Environment.NewLine + market;
+            }
         }
 
         private static void GenerateReport(BlacklistOptimizationResult lastResult, string[] pairsForReport, string file,
                                            BlacklistOptimizationOptions options)
         {
-            using Stream embeddedStream = Assembly.GetExecutingAssembly()
-                                                   .GetManifestResourceStream("FreqtradeMetaStrategy.BlacklistReportTemplate.html");
-            if (embeddedStream == null)
-            {
-                throw new InvalidOperationException("Report template not found.");
-            }
-            using StreamReader reportTemplateStream = new(embeddedStream);
-            string content = reportTemplateStream.ReadToEnd()
-                                                 .Replace("$(StrategyName)", options.Strategy)
-                                                 .Replace("$(PairProfit)", GeneratePairsChartData());
-            File.WriteAllText(file, content, Encoding.UTF8);
+            WriteReport(file, options, GeneratePairsChartData());
 
             string GeneratePairsChartData()
             {
@@ -101,35 +143,51 @@ namespace FreqtradeMetaStrategy
                 return string.Join($",{Environment.NewLine}", pairsProfitBuilders.Values);
             }
 
-            StringBuilder StartChart(string title, bool visible)
-            {
-                StringBuilder chartData = new();
-                chartData.AppendLine("{");
-                chartData.AppendLine("showInLegend: true,");
-                chartData.AppendLine("type: \"line\",");
-                chartData.AppendLine($"name: \"{title}\",");
-                chartData.AppendLine($"visible: {(visible?"true":"false")},");
-                chartData.AppendLine("toolTipContent: \"{name} - {x}: {y}%\",");
-                chartData.AppendLine("dataPoints: [");
-                return chartData;
-            }
-
-            void EndChart(StringBuilder chartData)
-            {
-                chartData.AppendLine("]");
-                chartData.AppendLine("}");
-            }
-            
-            void AddData(StringBuilder chartData, string date, double value)
-            {
-                chartData.AppendLine(
-                    $"{{ x: new Date({date[new Range(0, 4)]}, {date[new Range(4, 6)]}, {date[new Range(6, 8)]}), y: {value} }},");
-            }
-            
             Dictionary<string, StringBuilder> StartPairsProfitCharts()
             {
                 return pairsForReport.ToDictionary(p => p, p => StartChart(p, false));
             }
+        }
+
+        private static void WriteReport(string file, BlacklistOptimizationOptions options, string pairProfits)
+        {
+            using Stream embeddedStream = Assembly.GetExecutingAssembly()
+                                                  .GetManifestResourceStream(
+                                                       "FreqtradeMetaStrategy.BlacklistReportTemplate.html");
+            if (embeddedStream == null)
+            {
+                throw new InvalidOperationException("Report template not found.");
+            }
+
+            using StreamReader reportTemplateStream = new(embeddedStream);
+            string content = reportTemplateStream.ReadToEnd()
+                                                 .Replace("$(StrategyName)", options.Strategy)
+                                                 .Replace("$(PairProfit)", pairProfits);
+            File.WriteAllText(file, content, Encoding.UTF8);
+        }
+
+        private static void AddData(StringBuilder chartData, string date, double value)
+        {
+            chartData.AppendLine($"{{ x: new Date({date[new Range(0, 4)]}, {date[new Range(4, 6)]}, {date[new Range(6, 8)]}), y: {value} }},");
+        }
+
+        private static void EndChart(StringBuilder chartData)
+        {
+            chartData.AppendLine("]");
+            chartData.AppendLine("}");
+        }
+
+        private static StringBuilder StartChart(string title, bool visible)
+        {
+            StringBuilder chartData = new();
+            chartData.AppendLine("{");
+            chartData.AppendLine("showInLegend: true,");
+            chartData.AppendLine("type: \"line\",");
+            chartData.AppendLine($"name: \"{title}\",");
+            chartData.AppendLine($"visible: {(visible ? "true" : "false")},");
+            chartData.AppendLine("toolTipContent: \"{name} - {x}: {y}%\",");
+            chartData.AppendLine("dataPoints: [");
+            return chartData;
         }
 
         private static void RuleBasedBlacklistGeneration(BlacklistOptimizationResult result)
@@ -141,7 +199,8 @@ namespace FreqtradeMetaStrategy
                 HistoryData[] values = GetHistory(pair, result);
                 if (IsOverallNegative(values) ||
                     HasBiggerNegativeThenPositive(values) ||
-                    MoreThanTwiceNegative(values))
+                    MoreNegativeThanPositive(values) ||
+                    OnlyNegativeInRecentTimes(values))
                 {
                     blacklist.Add(pair);
                 }
@@ -162,10 +221,25 @@ namespace FreqtradeMetaStrategy
                        Math.Abs(min) > 3 * max;
             }
             
-            bool MoreThanTwiceNegative(HistoryData[] values)
+            bool MoreNegativeThanPositive(HistoryData[] values)
             {
                 return values.Count(v => v.Value < 0) >
-                       2 * values.Count(v => v.Value > 0);
+                       values.Count(v => v.Value > 0);
+            }
+            
+            bool OnlyNegativeInRecentTimes(HistoryData[] values)
+            {
+                int tradeIntervals = values.Count(v => v.Value != 0);
+                return values.Where(v=>v.Value !=0)
+                             .Skip((int)Math.Ceiling((double)(tradeIntervals/2)))
+                             .All(v => v.Value <=0) &&
+                       values.Where(v=>v.Value !=0)
+                             .Skip((int)Math.Ceiling((double)(tradeIntervals/2)))
+                             .Any(v => v.Value <=0) ||
+                       values.Skip((int)Math.Ceiling((double)(values.Length/2)))
+                             .All(v => v.Value <=0) &&
+                       values.Skip((int)Math.Ceiling((double)(values.Length/2)))
+                             .Any(v => v.Value <0);
             }
         }
 
