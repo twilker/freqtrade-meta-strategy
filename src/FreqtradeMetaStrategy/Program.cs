@@ -132,6 +132,9 @@ namespace FreqtradeMetaStrategy
         
         [Option('p', "pairs-partition", HelpText = "Number of pairs to run in one interval.", Required = true)]
         public int PairsPartition { get; set; }
+        
+        [Option('f', "time-frames", HelpText = "Override time frames.", Required = false)]
+        public string TimeFrames { get; set; }
     }
 
     public class CommonOptions

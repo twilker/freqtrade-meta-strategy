@@ -30,6 +30,7 @@ namespace FreqtradeMetaStrategy
             string greenReport = Path.Combine(ResultFolder, $"{options.Tag}-green-report.html");
             string performanceReport = Path.Combine(ResultFolder, $"{options.Tag}-performance-report.html");
             string configFile = Path.Combine(ResultFolder, $"{options.Tag}-config.json");
+            string timeframe = string.IsNullOrEmpty(options.TimeFrames) ? "5m 1h" : options.TimeFrames;
             BlacklistOptimizationResult lastResult = GetLastResult(options, resultFile);
             DeployConfig(configFile);
             if (lastResult.AllPairs == null)
@@ -40,7 +41,7 @@ namespace FreqtradeMetaStrategy
 
             if (!lastResult.DataDownloaded)
             {
-                DateTime endDate = DownloadData(options, lastResult, configFile);
+                DateTime endDate = DownloadData(options, lastResult, configFile, timeframe);
                 lastResult.DataDownloaded = true;
                 lastResult.EndDate = endDate;
                 SaveResult(lastResult, resultFile);
@@ -365,7 +366,9 @@ namespace FreqtradeMetaStrategy
             return result;
         }
 
-        private static DateTime DownloadData(BlacklistOptimizationOptions options, BlacklistOptimizationResult lastResult, string configFile)
+        private static DateTime DownloadData(BlacklistOptimizationOptions options,
+                                             BlacklistOptimizationResult lastResult, string configFile,
+                                             string timeframe)
         {
             string pairs = string.Join(" ", lastResult.AllPairs);
             int intervalCount = (int) Math.Ceiling((double) options.TimeRange / options.Interval);
@@ -374,7 +377,7 @@ namespace FreqtradeMetaStrategy
             string endDateFormat = endDate.ToString("yyyyMMdd");
             string startDateFormat = startDate.ToString("yyyyMMdd");
             ClassLogger.Information($"Download data for optimization.");
-            bool result = ProcessFacade.Execute("freqtrade", $"download-data -t 5m 1h --data-format-ohlcv hdf5 --timerange {startDateFormat}-{endDateFormat} -p {pairs} -c {configFile}");
+            bool result = ProcessFacade.Execute("freqtrade", $"download-data -t {timeframe} --data-format-ohlcv hdf5 --timerange {startDateFormat}-{endDateFormat} -p {pairs} -c {configFile}");
 
             if (!result)
             {
