@@ -63,12 +63,16 @@ namespace FreqtradeMetaStrategy
                 SaveResult(lastResult, resultFile);
             }
 
-            lastResult.Performance ??= new StrategyPerformance
+            if (lastResult.Performance == null)
             {
-                Unfiltered = CalculatePerformance(),
-                Filtered = CalculateFixedPerformance(),
-                Overall = CalculateOverallPerformance()
-            };
+                lastResult.Performance = new StrategyPerformance
+                {
+                    Unfiltered = CalculatePerformance(),
+                    Filtered = CalculateFixedPerformance(),
+                    Overall = CalculateOverallPerformance()
+                };
+                SaveResult(lastResult, resultFile);
+            }
             
             GenerateReport(lastResult, lastResult.Blacklist, blacklistReport, options);
             GenerateReport(lastResult, lastResult.AllPairs.Except(lastResult.Blacklist).ToArray(), greenReport, options);
