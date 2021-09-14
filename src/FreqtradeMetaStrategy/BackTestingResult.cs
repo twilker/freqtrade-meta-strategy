@@ -26,6 +26,7 @@ namespace FreqtradeMetaStrategy
         public double MarketChange { get; }
         public double TotalProfit { get; }
         public Dictionary<string, double> PairsProfit { get; }
+        public BackTestTrade[] Trades { get; set; }
 
         public override string ToString()
         {

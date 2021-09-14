@@ -135,6 +135,9 @@ namespace FreqtradeMetaStrategy
         
         [Option('f', "time-frames", HelpText = "Override time frames.", Required = false)]
         public string TimeFrames { get; set; }
+        
+        [Option('c', "compare-tag", HelpText = "Strategy to compare with this strategy. The same pair list will be used.", Required = false)]
+        public string CompareTag { get; set; }
     }
 
     public class CommonOptions

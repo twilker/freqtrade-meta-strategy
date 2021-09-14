@@ -1,14 +1,19 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
+using Newtonsoft.Json.Linq;
 
 namespace FreqtradeMetaStrategy
 {
     public static class ToolBox
     {
-        public static BackTestingResult EvaluateBackTestingResult(string output, string strategyName, int daysCount, bool isUnstableStake)
+        private static readonly Regex ResultFileParser =
+            new Regex(@"dumping json to ""(?<file_name>.*backtest-result.*\.json)""", RegexOptions.Compiled);
+        public static BackTestingResult EvaluateBackTestingResult(string output, string strategyName, int daysCount, bool isUnstableStake, bool parseTrades = false)
         {
             if (output.Contains("No trades made."))
             {
@@ -59,7 +64,36 @@ namespace FreqtradeMetaStrategy
             double market = double.Parse(marketChangeMatch.Groups["market"].Value,
                                               ConfigCulture);
             double dailyProfit = Math.Pow((totalProfit/100)+1,1.0/daysCount)-1;
-            return new BackTestingResult(strategyName, dailyProfit, tradesPerDay, pairProfits, isUnstableStake, drawDown, market, totalProfit);
+            BackTestingResult result = new(strategyName, dailyProfit, tradesPerDay, pairProfits, isUnstableStake,
+                                           drawDown, market, totalProfit);
+            if (!parseTrades)
+            {
+                return result;
+            }
+
+            Match resultFileMatch = ResultFileParser.Match(output);
+            if (resultFileMatch.Success)
+            {
+                ParseTrades(resultFileMatch.Groups["file_name"].Value, result);
+            }
+            return result;
+        }
+
+        private static void ParseTrades(string resultFile, BackTestingResult result)
+        {
+            JObject resultDocument = JObject.Parse(File.ReadAllText(resultFile, Encoding.UTF8));
+            JArray trades = resultDocument.Descendants().OfType<JProperty>()
+                                          .FirstOrDefault(p => p.Name == "trades" && p.Value is JArray)
+                                         ?.Value as JArray;
+            if (trades == null)
+            {
+                return;
+            }
+
+            result.Trades = trades.OfType<JObject>()
+                                  .Select(trade => new BackTestTrade(trade.Property("pair")?.Value.Value<string>(),
+                                                                     trade.Property("open_date")?.Value
+                                                                          .Value<DateTime>() ?? default)).ToArray();
         }
 
         private static readonly Regex BackTestingTradesPerDay = new(@"^\|\s*Total\/Daily Avg Trades\s*\|\s*\d+(?:\.\d+)?\s*\/\s*(?<trades>\d+(?:\.\d+)?).*\|$", RegexOptions.Compiled);
