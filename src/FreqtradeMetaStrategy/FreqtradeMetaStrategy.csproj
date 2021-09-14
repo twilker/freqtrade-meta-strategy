@@ -17,6 +17,7 @@
 
     <ItemGroup>
       <EmbeddedResource Include="blacklist-template-static-config.json" />
+      <EmbeddedResource Include="ParameterOptReportTemplate.html" />
       <EmbeddedResource Include="ReportTemplate.html" />
       <EmbeddedResource Include="BlacklistReportTemplate.html" />
       <None Remove="blacklist-template-config.json" />

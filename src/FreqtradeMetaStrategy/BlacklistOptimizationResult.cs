@@ -16,5 +16,6 @@ namespace FreqtradeMetaStrategy
         public BlacklistOptimizationPairsPartitionResult[] Results { get; set; }
         public string[] Blacklist { get; set; }
         public StrategyPerformance Performance { get; set; }
+        public ParameterOptimization ParameterOptimization { get; set; }
     }
 }

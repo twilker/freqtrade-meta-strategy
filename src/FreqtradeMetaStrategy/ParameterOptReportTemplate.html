@@ -1,0 +1,74 @@
+<!DOCTYPE HTML>
+<html>
+<head>  
+  <script type="text/javascript">
+  window.onload = function () {	
+	var openTradesChart = new CanvasJS.Chart("openTradesChartContainer", {
+        title: {
+          text: "Open Trades Optimization For Strategy $(StrategyName)"
+        },
+        zoomEnabled: true,
+        axisY:{
+            prefix: "% "
+        },
+        legend: {
+            cursor: "pointer",
+            itemclick: function (e) {
+                if (typeof (e.dataSeries.visible) === "undefined" || e.dataSeries.visible) {
+                    e.dataSeries.visible = false;
+                } else {
+                    e.dataSeries.visible = true;
+                }
+
+                e.chart.render();
+            }
+        },
+        data: [
+            $(OpenTradesChart)
+        ]
+    });
+
+    openTradesChart.render();
+    
+	var pairsCountChart = new CanvasJS.Chart("pairsCountChartContainer", {
+        title: {
+          text: "Pairs Count Optimization For Strategy $(StrategyName)"
+        },
+        zoomEnabled: true,
+        axisY:{
+            prefix: "% "
+        },
+        legend: {
+            cursor: "pointer",
+            itemclick: function (e) {
+                if (typeof (e.dataSeries.visible) === "undefined" || e.dataSeries.visible) {
+                    e.dataSeries.visible = false;
+                } else {
+                    e.dataSeries.visible = true;
+                }
+
+                e.chart.render();
+            }
+        },
+        data: [
+            $(PairsCountChart)
+        ]
+    });
+
+    pairsCountChart.render();
+  }
+  </script>
+ <script type="text/javascript" src="https://canvasjs.com/assets/script/canvasjs.min.js"></script>
+    <style>
+      div {
+        margin: 0px 0px 40px 0px;
+      }
+    </style>
+ </head>
+<body>
+  <div id="openTradesChartContainer" style="height: 300px; max-width: 920px; margin: 0px auto;">
+  </div>
+  <div id="pairsCountChartContainer" style="height: 300px; max-width: 920px; margin: 0px auto;">
+  </div>
+</body>
+</html>
