@@ -88,12 +88,14 @@ namespace FreqtradeMetaStrategy
             GenerateReport(lastResult, lastResult.AllPairs.Except(lastResult.Blacklist).ToArray(), greenReport, options);
             GeneratePerformanceReport(lastResult, performanceReport, options);
             GenerateParameterOptimizationReport(lastResult, parameterOptimizationReport, options);
-            ClassLogger.Information($"Found {lastResult.Blacklist.Length} blacklisted pairs. Performance of the strategy {options.Strategy} is: Top {options.PairsPartition} - {lastResult.Performance.Unfiltered*100:F2}% | All - {lastResult.Performance.Overall*100:F2}% | Blacklisted Top {options.PairsPartition} - {lastResult.Performance.Filtered*100:F2}%. Happy trading ^^.");
+            
             if (lastCompareResult?.Strategy != null)
             {
                 double correlation = CompareStrategies(lastCompareResult.Strategy, options.Strategy, lastResult, options.Interval*2, configFile);
                 ClassLogger.Information($"Comparision of {lastCompareResult.Strategy} to {options.Strategy} - correlation: {correlation*100:F2}%");
             }
+            ClassLogger.Information($"Found {lastResult.Blacklist.Length} blacklisted pairs. Performance of the strategy {options.Strategy} is: Top {options.PairsPartition} - {lastResult.Performance.Unfiltered*100:F2}% | All - {lastResult.Performance.Overall*100:F2}% | Blacklisted Top {options.PairsPartition} - {lastResult.Performance.Filtered*100:F2}%. Happy trading ^^.");
+            
             return true;
 
             double CalculatePerformance()
@@ -132,7 +134,7 @@ namespace FreqtradeMetaStrategy
             BackTestingResult compareResult = BackTesting(daysCount, endDateFormat, startDateFormat, configFile,
                                                        string.Join(" ", lastResult.Results[0].PairList), 9,
                                                        compareStrategy, true);
-            return (double) baseResult.Trades.Count(t => compareResult.Trades.Any(tc => tc.OpenTime == t.OpenTime))
+            return (double) baseResult.Trades.Count(t => compareResult.Trades.Any(tc => tc.OpenTime == t.OpenTime && tc.Pair == t.Pair))
                    / baseResult.Trades.Length;
         }
 
