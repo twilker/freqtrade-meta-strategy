@@ -21,8 +21,6 @@ namespace FreqtradeMetaStrategy
         private const string ResultFolder = "./user_data/blacklist-optimization";
         private static readonly ILogger ClassLogger = Log.ForContext(typeof(BlacklistOptimization));
 
-        private static readonly Regex PairMatcher =
-            new Regex(@"'(?<pair>[0-9A-Za-z]+\/[0-9A-Za-z]+)'", RegexOptions.Compiled);
         public static bool GenerateOptimalBlacklist(BlacklistOptimizationOptions options)
         {
             string resultFile = Path.Combine(ResultFolder, $"{options.Tag}-result.json");
@@ -33,24 +31,12 @@ namespace FreqtradeMetaStrategy
             string parameterOptimizationReport = Path.Combine(ResultFolder, $"{options.Tag}-parameter-optimization-report.html");
             string configFile = Path.Combine(ResultFolder, $"{options.Tag}-config.json");
             string timeframe = string.IsNullOrEmpty(options.TimeFrames) ? "5m 1h" : options.TimeFrames;
-            BlacklistOptimizationResult lastCompareResult = GetLastResult(options, compareResultFile);
+            int longInterval = options.LongInterval > 0 ? options.LongInterval : options.Interval * 4; 
+            BlacklistOptimizationResult lastCompareResult = GetLastResult(options, compareResultFile, createEmpty:false);
             BlacklistOptimizationResult lastResult = GetLastResult(options, resultFile, lastCompareResult);
-            DeployConfig(configFile);
-            if (lastResult.AllPairs == null)
-            {
-                FindTradablePairs(lastResult, configFile);
-                SaveResult(lastResult, resultFile);
-            }
 
-            if (!lastResult.DataDownloaded)
-            {
-                DateTime endDate = DownloadData(options, lastResult, configFile, timeframe);
-                lastResult.DataDownloaded = true;
-                lastResult.EndDate = endDate;
-                SaveResult(lastResult, resultFile);
-            }
+            ToolBox.FindPairsDownloadAndSetConfig(configFile, lastResult.AllPairs == null, !lastResult.DataDownloaded, options.TimeRange, options.Interval, timeframe, SetPairs, SetDataDownloaded, GetAllPairs);
 
-            DeployStaticConfig(configFile);
             BlacklistOptimizationPairsPartitionResult pairsChunk = GetNextPairsChunk(options, lastResult);
             SaveResult(lastResult, resultFile);
             while (pairsChunk!= null)
@@ -81,7 +67,8 @@ namespace FreqtradeMetaStrategy
             lastResult.ParameterOptimization ??= new ParameterOptimization();
             if (!lastResult.ParameterOptimization.Completed)
             {
-                OptimizeParameters(options, lastResult, configFile, () => SaveResult(lastResult, resultFile));
+                OptimizeParameters(options, lastResult, configFile, longInterval,
+                                   () => SaveResult(lastResult, resultFile));
             }
             
             GenerateReport(lastResult, lastResult.Blacklist, blacklistReport, options);
@@ -97,6 +84,21 @@ namespace FreqtradeMetaStrategy
             ClassLogger.Information($"Found {lastResult.Blacklist.Length} blacklisted pairs. Performance of the strategy {options.Strategy} is: Top {options.PairsPartition} - {lastResult.Performance.Unfiltered*100:F2}% | All - {lastResult.Performance.Overall*100:F2}% | Blacklisted Top {options.PairsPartition} - {lastResult.Performance.Filtered*100:F2}%. Happy trading ^^.");
             
             return true;
+            
+            void SetPairs(string[] pairs)
+            {
+                lastResult.AllPairs = pairs;
+                SaveResult(lastResult, resultFile);
+            }
+
+            void SetDataDownloaded(DateTime endDate)
+            {
+                lastResult.DataDownloaded = true;
+                lastResult.EndDate = endDate;
+                SaveResult(lastResult, resultFile);
+            }
+
+            string[] GetAllPairs() => lastResult.AllPairs;
 
             double CalculatePerformance()
             {
@@ -128,22 +130,23 @@ namespace FreqtradeMetaStrategy
             DateTime startDate = lastResult.EndDate - new TimeSpan(daysCount, 0, 0, 0);
             string endDateFormat = lastResult.EndDate.ToString("yyyyMMdd");
             string startDateFormat = startDate.ToString("yyyyMMdd");
-            BackTestingResult baseResult = BackTesting(daysCount, endDateFormat, startDateFormat, configFile,
-                                                       string.Join(" ", lastResult.Results[0].PairList), 9,
-                                                       baseStrategy, true);
-            BackTestingResult compareResult = BackTesting(daysCount, endDateFormat, startDateFormat, configFile,
-                                                       string.Join(" ", lastResult.Results[0].PairList), 9,
-                                                       compareStrategy, true);
+            BackTestingResult baseResult = ToolBox.BackTesting(daysCount, endDateFormat, startDateFormat, configFile,
+                                                          string.Join(" ", lastResult.Results[0].PairList), 9,
+                                                          baseStrategy, true);
+            BackTestingResult compareResult = ToolBox.BackTesting(daysCount, endDateFormat, startDateFormat, configFile,
+                                                             string.Join(" ", lastResult.Results[0].PairList), 9,
+                                                             compareStrategy, true);
             return (double) baseResult.Trades.Count(t => compareResult.Trades.Any(tc => tc.OpenTime == t.OpenTime && tc.Pair == t.Pair))
                    / baseResult.Trades.Length;
         }
 
         private static void OptimizeParameters(BlacklistOptimizationOptions options,
                                                BlacklistOptimizationResult lastResult,
-                                               string configFile, Action persistAction)
+                                               string configFile, int longInterval, 
+                                               Action persistAction)
         {
             string pairs = string.Join(" ", lastResult.AllPairs.Take(70));
-            int daysCount = options.Interval * 4;
+            int daysCount = longInterval;
             DateTime endDate = lastResult.EndDate - new TimeSpan(1, 0, 0, 0);
             DateTime startDate = endDate - new TimeSpan(daysCount, 0, 0, 0);
             string endDateFormat = endDate.ToString("yyyyMMdd");
@@ -157,14 +160,14 @@ namespace FreqtradeMetaStrategy
                     continue;
                 }
 
-                BackTestingResult result = BackTesting(daysCount, endDateFormat, startDateFormat, configFile, pairs, openTrades,
-                    options.Strategy);
+                BackTestingResult result = ToolBox.BackTesting(daysCount, endDateFormat, startDateFormat, configFile, pairs, openTrades,
+                                                          options.Strategy);
                 lastResult.ParameterOptimization.Intervals = (lastResult.ParameterOptimization.Intervals??Enumerable.Empty<ParameterInterval>())
                                                                        .Concat(new []{new ParameterInterval
                                                                         {
                                                                             ParameterType = ParameterType.MaxOpenTrades,
                                                                             ParameterValue = openTrades,
-                                                                            Result = ConvertToIntervalResult(result, startDateFormat, endDateFormat) 
+                                                                            Result = result.ConvertToIntervalResult(startDateFormat, endDateFormat) 
                                                                         }})
                                                                        .ToArray();
                 persistAction();
@@ -182,14 +185,14 @@ namespace FreqtradeMetaStrategy
                 }
 
                 pairs = string.Join(" ", lastResult.AllPairs.Take(pairsCount));
-                BackTestingResult result = BackTesting(daysCount, endDateFormat, startDateFormat, configFile, pairs, bestOpenTrades,
-                    options.Strategy);
+                BackTestingResult result = ToolBox.BackTesting(daysCount, endDateFormat, startDateFormat, configFile, pairs, bestOpenTrades,
+                                                          options.Strategy);
                 lastResult.ParameterOptimization.Intervals = lastResult.ParameterOptimization.Intervals
                                                                        .Concat(new []{new ParameterInterval
                                                                         {
                                                                             ParameterType = ParameterType.PairsCount,
                                                                             ParameterValue = pairsCount,
-                                                                            Result = ConvertToIntervalResult(result, startDateFormat, endDateFormat) 
+                                                                            Result = result.ConvertToIntervalResult(startDateFormat, endDateFormat) 
                                                                         }})
                                                                        .ToArray();
                 persistAction();
@@ -205,15 +208,16 @@ namespace FreqtradeMetaStrategy
             
             string GeneratePerformanceChart()
             {
-                StringBuilder profit = StartChart("Profit", true);
-                StringBuilder market = StartChart("Market Change", true);
+                StringBuilder profit = ToolBox.StartChart("Profit", true);
+                StringBuilder market = ToolBox.StartChart("Market Change", true);
                 foreach (IntervalResult result in lastResult.Results[0].Results)
                 {
                     AddData(profit, result.StartDate, result.Profit);
                     AddData(market, result.StartDate, result.MarketChange);
                 }
-                EndChart(profit);
-                EndChart(market);
+
+                ToolBox.EndChart(profit);
+                ToolBox.EndChart(market);
                 return profit + "," + Environment.NewLine + market;
             }
         }
@@ -225,19 +229,20 @@ namespace FreqtradeMetaStrategy
                                                                    .ToArray()))
                                                        .Replace("$(PairsCountChart)", GenerateChart(lastResult.ParameterOptimization.Intervals.Where(i => i.ParameterType == ParameterType.PairsCount)
                                                                    .ToArray()));
-            WriteReport(parameterOptimizationReport, "FreqtradeMetaStrategy.ParameterOptReportTemplate.html", transformator);
+            ToolBox.WriteReport(parameterOptimizationReport, "FreqtradeMetaStrategy.ParameterOptReportTemplate.html", transformator);
             
             string GenerateChart(ParameterInterval[] parameterIntervals)
             {
-                StringBuilder profit = StartChart("Profit", true);
-                StringBuilder drawDown = StartChart("Draw Down", true);
+                StringBuilder profit = ToolBox.StartChart("Profit", true);
+                StringBuilder drawDown = ToolBox.StartChart("Draw Down", true);
                 foreach (ParameterInterval interval in parameterIntervals)
                 {
                     profit.AppendLine($"{{ x: {interval.ParameterValue}, y: {interval.Result.Profit} }},");
                     drawDown.AppendLine($"{{ x: {interval.ParameterValue}, y: {interval.Result.DrawDown} }},");
                 }
-                EndChart(profit);
-                EndChart(drawDown);
+
+                ToolBox.EndChart(profit);
+                ToolBox.EndChart(drawDown);
                 return profit + "," + Environment.NewLine + drawDown;
             }
         }
@@ -259,7 +264,7 @@ namespace FreqtradeMetaStrategy
                 }
                 foreach (StringBuilder chartData in pairsProfitBuilders.Values)
                 {
-                    EndChart(chartData);
+                    ToolBox.EndChart(chartData);
                 }
 
                 return string.Join($",{Environment.NewLine}", pairsProfitBuilders.Values);
@@ -267,7 +272,7 @@ namespace FreqtradeMetaStrategy
 
             Dictionary<string, StringBuilder> StartPairsProfitCharts()
             {
-                return pairsForReport.ToDictionary(p => p, p => StartChart(p, false));
+                return pairsForReport.ToDictionary(p => p, p => ToolBox.StartChart(p, false));
             }
         }
 
@@ -276,45 +281,12 @@ namespace FreqtradeMetaStrategy
             Func<string, string> transformator = c => c.Replace("$(StrategyName)", options.Strategy)
                                                        .Replace("$(PairProfit)", pairProfits);
             string resourceKey = "FreqtradeMetaStrategy.BlacklistReportTemplate.html";
-            WriteReport(file, resourceKey, transformator);
-        }
-
-        private static void WriteReport(string file, string resourceKey, Func<string, string> transformator)
-        {
-            using Stream embeddedStream = Assembly.GetExecutingAssembly()
-                                                  .GetManifestResourceStream(resourceKey);
-            if (embeddedStream == null)
-            {
-                throw new InvalidOperationException("Report template not found.");
-            }
-
-            using StreamReader reportTemplateStream = new(embeddedStream);
-            string content = transformator(reportTemplateStream.ReadToEnd());
-            File.WriteAllText(file, content, Encoding.UTF8);
+            ToolBox.WriteReport(file, resourceKey, transformator);
         }
 
         private static void AddData(StringBuilder chartData, string date, double value)
         {
             chartData.AppendLine($"{{ x: new Date({date[new Range(0, 4)]}, {date[new Range(4, 6)]}, {date[new Range(6, 8)]}), y: {value} }},");
-        }
-
-        private static void EndChart(StringBuilder chartData)
-        {
-            chartData.AppendLine("]");
-            chartData.AppendLine("}");
-        }
-
-        private static StringBuilder StartChart(string title, bool visible)
-        {
-            StringBuilder chartData = new();
-            chartData.AppendLine("{");
-            chartData.AppendLine("showInLegend: true,");
-            chartData.AppendLine("type: \"line\",");
-            chartData.AppendLine($"name: \"{title}\",");
-            chartData.AppendLine($"visible: {(visible ? "true" : "false")},");
-            chartData.AppendLine("toolTipContent: \"{name} - {x}: {y}%\",");
-            chartData.AppendLine("dataPoints: [");
-            return chartData;
         }
 
         private static void RuleBasedBlacklistGeneration(BlacklistOptimizationResult result)
@@ -414,30 +386,10 @@ namespace FreqtradeMetaStrategy
         private static void UpdateResult(BlacklistOptimizationPairsPartitionResult lastResult, BackTestingResult result, Action persistAction,
                                          string startDate, string endDate)
         {
-            IntervalResult intervalResult = ConvertToIntervalResult(result, startDate, endDate);
+            IntervalResult intervalResult = result.ConvertToIntervalResult(startDate, endDate);
             lastResult.Results = lastResult.Results.Concat(new[] {intervalResult})
                                            .ToArray();
             persistAction();
-        }
-
-        private static IntervalResult ConvertToIntervalResult(BackTestingResult result, string startDate, string endDate)
-        {
-            IntervalResult intervalResult = new()
-            {
-                Profit = result.TotalProfit,
-                DrawDown = result.DrawDown,
-                MarketChange = result.MarketChange,
-                StartDate = startDate,
-                EndDate = endDate,
-                Pairs = result.PairsProfit
-                              .Select(kv => new PairProfit
-                               {
-                                   Pair = kv.Key,
-                                   Profit = kv.Value
-                               })
-                              .ToArray()
-            };
-            return intervalResult;
         }
 
         private static BackTestingResult BackTestInterval(BlacklistOptimizationOptions options, string endDate,
@@ -447,25 +399,7 @@ namespace FreqtradeMetaStrategy
         {
             string pairs = string.Join(" ", lastResult.PairList);
             int openTrades = 1;
-            return BackTesting(options.Interval, endDate, startDate, configFile, pairs, openTrades, options.Strategy);
-        }
-
-        private static BackTestingResult BackTesting(int daysCount, string endDate, string startDate,
-                                                     string configFile, string pairs, int openTrades, string strategy, 
-                                                     bool parseTrades = false)
-        {
-            bool result = ProcessFacade.Execute("freqtrade",
-                                                $"backtesting --data-format-ohlcv hdf5  --timerange {startDate}-{endDate} -s {strategy} -c {configFile} -p {pairs} --max-open-trades {openTrades}",
-                                                out StringBuilder output);
-            if (!result)
-            {
-                throw new InvalidOperationException(
-                    $"Unexpected failure of back testing strategy {strategy}.");
-            }
-
-            BackTestingResult newResult =
-                ToolBox.EvaluateBackTestingResult(output.ToString(), strategy, daysCount, false, parseTrades);
-            return newResult;
+            return ToolBox.BackTesting(options.Interval, endDate, startDate, configFile, pairs, openTrades, options.Strategy);
         }
 
         private static DateTime GetLastStartDate(BlacklistOptimizationPairsPartitionResult lastResult, DateTime endDate, out int completedIntervals)
@@ -511,90 +445,6 @@ namespace FreqtradeMetaStrategy
             return result;
         }
 
-        private static DateTime DownloadData(BlacklistOptimizationOptions options,
-                                             BlacklistOptimizationResult lastResult, string configFile,
-                                             string timeframe)
-        {
-            string pairs = string.Join(" ", lastResult.AllPairs);
-            int intervalCount = (int) Math.Ceiling((double) options.TimeRange / options.Interval);
-            DateTime endDate = DateTime.Today;
-            DateTime startDate = endDate - new TimeSpan(options.Interval * intervalCount + 20, 0, 0, 0);
-            string endDateFormat = endDate.ToString("yyyyMMdd");
-            string startDateFormat = startDate.ToString("yyyyMMdd");
-            ClassLogger.Information($"Download data for optimization.");
-            bool result = ProcessFacade.Execute("freqtrade", $"download-data -t {timeframe} --data-format-ohlcv hdf5 --timerange {startDateFormat}-{endDateFormat} -p {pairs} -c {configFile}");
-
-            if (!result)
-            {
-                throw new InvalidOperationException(
-                    $"Error while downloading data.");
-            }
-            return endDate;
-        }
-
-        private static void FindTradablePairs(BlacklistOptimizationResult lastResult, string configFile)
-        {
-            bool result = ProcessFacade.Execute("freqtrade",
-                                                $"test-pairlist -c {configFile}",
-                                                out StringBuilder output);
-            if (!result)
-            {
-                throw new InvalidOperationException(
-                    $"Unexpected failure of retrieving all pairs.");
-            }
-
-            List<string> pairs = new();
-            string content = output.ToString();
-            string lastLine = content.Split(new[] { Environment.NewLine },
-                                            StringSplitOptions.RemoveEmptyEntries).Last();
-            Match pairsMatch = PairMatcher.Match(lastLine);
-            while (pairsMatch.Success)
-            {
-                pairs.Add(pairsMatch.Groups["pair"].Value);
-                pairsMatch = pairsMatch.NextMatch();
-            }
-
-            if (!pairs.Any())
-            {
-                throw new InvalidOperationException($"Pairs not found in line: {lastLine}. Complete output: {content}");
-            }
-
-            lastResult.AllPairs = pairs.ToArray();
-        }
-
-        private static void DeployStaticConfig(string configFile)
-        {
-            DeployResource(configFile, "FreqtradeMetaStrategy.blacklist-template-static-config.json");
-        }
-
-        private static void DeployConfig(string configFile)
-        {
-            DeployResource(configFile, "FreqtradeMetaStrategy.blacklist-template-config.json");
-        }
-
-        private static void DeployResource(string file, string resource)
-        {
-            FileInfo fileInfo = new(file);
-            if (!fileInfo.Directory?.Exists != true)
-            {
-                fileInfo.Directory?.Create();
-            }
-
-            if (fileInfo.Exists)
-            {
-                fileInfo.Delete();
-            }
-
-            using Stream resourceStream = Assembly.GetExecutingAssembly()
-                                                  .GetManifestResourceStream(resource);
-            using Stream fileStream = fileInfo.OpenWrite();
-            if (resourceStream == null)
-            {
-                throw new InvalidOperationException($"resource \"{resource}\" not found. Available: {string.Join("; ", Assembly.GetExecutingAssembly().GetManifestResourceNames())}");
-            }
-            resourceStream.CopyTo(fileStream);
-        }
-
         private static void SaveResult(BlacklistOptimizationResult result, string resultFile)
         {
             File.WriteAllText(resultFile, JsonConvert.SerializeObject(result, Formatting.Indented), Encoding.UTF8);
@@ -603,7 +453,7 @@ namespace FreqtradeMetaStrategy
         private static BlacklistOptimizationResult GetLastResult(BlacklistOptimizationOptions options,
                                                                  string resultFile,
                                                                  BlacklistOptimizationResult
-                                                                     compareResult = null)
+                                                                     compareResult = null, bool createEmpty = true)
         {
             FileInfo fileInfo = new(resultFile);
             if (!fileInfo.Directory?.Exists != true)
@@ -613,18 +463,20 @@ namespace FreqtradeMetaStrategy
 
             if (!fileInfo.Exists)
             {
-                return compareResult?.Performance != null
-                           ? new BlacklistOptimizationResult
-                           {
-                               Strategy = options.Strategy,
-                               AllPairs = compareResult.AllPairs,
-                               DataDownloaded = true,
-                               EndDate = compareResult.EndDate
-                           }
-                           : new BlacklistOptimizationResult
-                           {
-                               Strategy = options.Strategy
-                           };
+                return createEmpty
+                           ? compareResult?.Performance != null
+                                 ? new BlacklistOptimizationResult
+                                 {
+                                     Strategy = options.Strategy,
+                                     AllPairs = compareResult.AllPairs,
+                                     DataDownloaded = true,
+                                     EndDate = compareResult.EndDate
+                                 }
+                                 : new BlacklistOptimizationResult
+                                 {
+                                     Strategy = options.Strategy
+                                 }
+                           : null;
             }
 
             return JsonConvert.DeserializeObject<BlacklistOptimizationResult>(File.ReadAllText(resultFile));

@@ -31,8 +31,14 @@ namespace FreqtradeMetaStrategy
         //REST client: https://restsharp.dev/
         public static int Main(string[] args)
         {
-            return Parser.Default.ParseArguments<FindOptimizedStrategiesOptions, CreateConfigurationOptions, LongTermTestOptions, BlacklistOptimizationOptions>(args)
-                  .MapResult<FindOptimizedStrategiesOptions, CreateConfigurationOptions, LongTermTestOptions, BlacklistOptimizationOptions,int>(ExecuteFindStrategy, ExecuteCreateConfig, ExecuteLongTermTest, ExecuteBlacklistOptimization, MapError);
+            return Parser.Default.ParseArguments<FindOptimizedStrategiesOptions, CreateConfigurationOptions, LongTermTestOptions, BlacklistOptimizationOptions, ParameterOptimizationOptions>(args)
+                  .MapResult<FindOptimizedStrategiesOptions, CreateConfigurationOptions, LongTermTestOptions, BlacklistOptimizationOptions, ParameterOptimizationOptions,int>(ExecuteFindStrategy, ExecuteCreateConfig, ExecuteLongTermTest, ExecuteBlacklistOptimization, ExecuteParameterOptimization, MapError);
+        }
+
+        private static int ExecuteParameterOptimization(ParameterOptimizationOptions arg)
+        {
+            ConfigureLogging(arg);
+            return ParameterOptimizationTest.OptimizeParameters(arg) ? 0 : 1;
         }
 
         private static int ExecuteBlacklistOptimization(BlacklistOptimizationOptions arg)
@@ -138,6 +144,49 @@ namespace FreqtradeMetaStrategy
         
         [Option('c', "compare-tag", HelpText = "Strategy to compare with this strategy. The same pair list will be used.", Required = false)]
         public string CompareTag { get; set; }
+        
+        [Option("long-interval", HelpText = "Long interval used for parameter optimization.", Required = false)]
+        public int LongInterval { get; set; }
+    }
+
+    [Verb("parameter-optimization", HelpText="Generate an optimized set of parameters for a single strategy.")]
+    public class ParameterOptimizationOptions : CommonOptions
+    {
+        [Option('s', "strategy", HelpText = "The strategy to test.", Required = true)]
+        public string Strategy { get; set; }
+        
+        [Option('t', "tag", HelpText = "Tag to identify run.", Required = true)]
+        public string Tag { get; set; }
+        
+        [Option('i', "interval", HelpText = "The interval in days.", Required = true)]
+        public int Interval { get; set; }
+        
+        [Option('r', "time-range", HelpText = "The whole time range.", Required = true)]
+        public int TimeRange { get; set; }
+        
+        [Option("pair-range-low", HelpText = "Override low end of the pairs range test.", Required = false, Default = 60)]
+        public int PairsRangeLow { get; set; }
+        
+        [Option("pair-range-high", HelpText = "Override high end of the pairs range test.", Required = false, Default = 100)]
+        public int PairsRangeHigh { get; set; }
+        
+        [Option("pair-interval", HelpText = "Override the interval of the pairs range test.", Required = false, Default = 5)]
+        public int PairsInterval { get; set; }
+        
+        [Option("pair-test-open-trades", HelpText = "Override the max open trades of the pairs range test.", Required = false, Default = 3)]
+        public int PairsTestOpenTrades { get; set; }
+        
+        [Option("open-trades-low", HelpText = "Override low end of the open trades test.", Required = false, Default = 1)]
+        public int OpenTradesLow { get; set; }
+        
+        [Option("open-trades-high", HelpText = "Override high end of the open trades test.", Required = false, Default = 9)]
+        public int OpenTradesHigh { get; set; }
+        
+        [Option("open-trades-interval", HelpText = "Override the interval of the open trades test.", Required = false, Default = 1)]
+        public int OpenTradesInterval { get; set; }
+        
+        [Option('f', "time-frames", HelpText = "Override time frames.", Required = false, Default = "5m 1h")]
+        public string TimeFrames { get; set; }
     }
 
     public class CommonOptions
