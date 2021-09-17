@@ -291,5 +291,10 @@ namespace FreqtradeMetaStrategy
             chartData.AppendLine("dataPoints: [");
             return chartData;
         }
+
+        public static void AddData(StringBuilder chartData, string date, double value)
+        {
+            chartData.AppendLine($"{{ x: new Date({date[new Range(0, 4)]}, {date[new Range(4, 6)]}, {date[new Range(6, 8)]}), y: {value} }},");
+        }
     }
 }

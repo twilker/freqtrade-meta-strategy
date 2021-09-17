@@ -212,8 +212,8 @@ namespace FreqtradeMetaStrategy
                 StringBuilder market = ToolBox.StartChart("Market Change", true);
                 foreach (IntervalResult result in lastResult.Results[0].Results)
                 {
-                    AddData(profit, result.StartDate, result.Profit);
-                    AddData(market, result.StartDate, result.MarketChange);
+                    ToolBox.AddData(profit, result.StartDate, result.Profit);
+                    ToolBox.AddData(market, result.StartDate, result.MarketChange);
                 }
 
                 ToolBox.EndChart(profit);
@@ -259,7 +259,7 @@ namespace FreqtradeMetaStrategy
                 {
                     foreach ((string date, double value) in GetHistory(pair, lastResult))
                     {
-                        AddData(pairsProfitBuilders[pair], date, value);
+                        ToolBox.AddData(pairsProfitBuilders[pair], date, value);
                     }
                 }
                 foreach (StringBuilder chartData in pairsProfitBuilders.Values)
@@ -282,11 +282,6 @@ namespace FreqtradeMetaStrategy
                                                        .Replace("$(PairProfit)", pairProfits);
             string resourceKey = "FreqtradeMetaStrategy.BlacklistReportTemplate.html";
             ToolBox.WriteReport(file, resourceKey, transformator);
-        }
-
-        private static void AddData(StringBuilder chartData, string date, double value)
-        {
-            chartData.AppendLine($"{{ x: new Date({date[new Range(0, 4)]}, {date[new Range(4, 6)]}, {date[new Range(6, 8)]}), y: {value} }},");
         }
 
         private static void RuleBasedBlacklistGeneration(BlacklistOptimizationResult result)

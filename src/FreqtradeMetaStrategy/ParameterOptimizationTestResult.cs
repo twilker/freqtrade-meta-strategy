@@ -10,5 +10,6 @@ namespace FreqtradeMetaStrategy
         public DateTime EndDate { get; set; }
         public ParameterOptimization ParameterOptimization { get; set; }
         public ParameterScore[] Scores { get; set; }
+        public HistoricParameterScore[] HistoricScores { get; set; }
     }
 }

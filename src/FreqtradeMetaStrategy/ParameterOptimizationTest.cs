@@ -30,8 +30,11 @@ namespace FreqtradeMetaStrategy
                                    () => SaveResult(lastResult, resultFile));
             }
 
-            lastResult.Scores = CalculateScores(lastResult.ParameterOptimization.Intervals);
+            ScoresResult scoresResult = CalculateScores(lastResult.ParameterOptimization.Intervals);
+            lastResult.Scores = scoresResult.Scores;
+            lastResult.HistoricScores = scoresResult.HistoricScores;
             SaveResult(lastResult, resultFile);
+            
             GenerateReport(lastResult, report, options);
             int optimalOpenTrades = lastResult.Scores.Where(s => s.Type == ParameterType.MaxOpenTrades)
                                               .OrderByDescending(s => s.Score).First().Value;
@@ -63,20 +66,49 @@ namespace FreqtradeMetaStrategy
                                                        .Replace("$(OpenTradesChart)", GenerateChart(lastResult.Scores.Where(score => score.Type == ParameterType.MaxOpenTrades)
                                                                    .ToArray()))
                                                        .Replace("$(PairsCountChart)", GenerateChart(lastResult.Scores.Where(score => score.Type == ParameterType.PairsCount)
+                                                                   .ToArray()))
+                                                       .Replace("$(HistoricOpenTradesChart)", GenerateHistoryChart(lastResult.HistoricScores.Where(score => score.Type == ParameterType.MaxOpenTrades)
+                                                                   .ToArray()))
+                                                       .Replace("$(HistoricPairsCountChart)", GenerateHistoryChart(lastResult.HistoricScores.Where(score => score.Type == ParameterType.PairsCount)
                                                                    .ToArray()));
             ToolBox.WriteReport(report, "FreqtradeMetaStrategy.ParameterScoresReportTemplate.html", transformator);
             
             string GenerateChart(ParameterScore[] parameterScores)
             {
                 StringBuilder scores = ToolBox.StartChart("Score", true);
+                StringBuilder winners = ToolBox.StartChart("Wins", true);
                 foreach (ParameterScore score in parameterScores.OrderBy(s => s.Value))
                 {
                     scores.AppendLine($"{{ x: {score.Value}, y: {score.Score} }},");
+                    winners.AppendLine($"{{ x: {score.Value}, y: {score.Winner} }},");
                 }
                 ToolBox.EndChart(scores);
-                return scores.ToString();
+                ToolBox.EndChart(winners);
+                return scores + "," + Environment.NewLine + winners;
+            }
+            
+            string GenerateHistoryChart(HistoricParameterScore[] parameterScores)
+            {
+                HistoryChart[] charts = parameterScores.GroupBy(s => s.Value)
+                                                       .OrderBy(g => g.Key)
+                                                       .Select(g => new HistoryChart(
+                                                                   ToolBox.StartChart(g.Key.ToString("D"), false),
+                                                                   g.ToArray()))
+                                                       .ToArray();
+                foreach (HistoryChart chart in charts)
+                {
+                    foreach (HistoricParameterScore score in chart.Scores.OrderBy(s => s.Date))
+                    {
+                        ToolBox.AddData(chart.Chart, score.Date, score.Score);
+                    }
+                    ToolBox.EndChart(chart.Chart);
+                }
+
+                return string.Join("," + Environment.NewLine, charts.Select(c => c.Chart.ToString()));
             }
         }
+
+        private record HistoryChart(StringBuilder Chart, HistoricParameterScore[] Scores);
 
         private static void OptimizeParameters(ParameterOptimizationOptions options,
                                                ParameterOptimizationTestResult lastResult,
@@ -126,10 +158,10 @@ namespace FreqtradeMetaStrategy
                 persistAction();
             }
 
-            ParameterScore[] scores =
+            ScoresResult scores =
                 CalculateScores(
                     lastResult.ParameterOptimization.Intervals.Where(i => i.ParameterType == ParameterType.PairsCount));
-            int optimalPairs = scores.OrderByDescending(s => s.Score).First().Value;
+            int optimalPairs = scores.Scores.OrderByDescending(s => s.Score).First().Value;
             
             IEnumerable<ParameterTest> untestedOpenTradesTests = parameterTests.Where(t => t.Type == ParameterType.MaxOpenTrades)
                                                                           .Where(t => lastResult.ParameterOptimization.Intervals?.Any(t.Matches) != true);
@@ -151,10 +183,32 @@ namespace FreqtradeMetaStrategy
             }
         }
 
-        private static ParameterScore[] CalculateScores(IEnumerable<ParameterInterval> parameterIntervals)
+        private static ScoresResult CalculateScores(IEnumerable<ParameterInterval> parameterIntervals)
         {
+            parameterIntervals = parameterIntervals.ToArray();
             IEnumerable<IGrouping<ParameterScoreId, ParameterInterval>> grouping = parameterIntervals.GroupBy(i => new ParameterScoreId(i.ParameterType, i.Result.StartDate));
             Dictionary<ParameterId, int> scores = new();
+            Dictionary<ParameterId, int> winners = new();
+            Dictionary<HistoricParameterId, int> historicScores = new();
+            int openTradesValuesCount = parameterIntervals.Where(i => i.ParameterType == ParameterType.MaxOpenTrades)
+                                                          .Select(i => i.ParameterValue)
+                                                          .Distinct()
+                                                          .Count() + 1;
+            int maximumOpenTradesWinners = parameterIntervals.Where(i => i.ParameterType == ParameterType.MaxOpenTrades)
+                                                             .Select(i => i.Result.StartDate)
+                                                             .Distinct()
+                                                             .Count();
+            int maximumOpenTradesScore = openTradesValuesCount * maximumOpenTradesWinners;
+            int pairsValuesCount = parameterIntervals.Where(i => i.ParameterType == ParameterType.PairsCount)
+                                                          .Select(i => i.ParameterValue)
+                                                          .Distinct()
+                                                          .Count() + 1;
+            int maximumPairsWinners = parameterIntervals.Where(i => i.ParameterType == ParameterType.PairsCount)
+                                                             .Select(i => i.Result.StartDate)
+                                                             .Distinct()
+                                                             .Count();
+            int maximumPairsScore = pairsValuesCount * maximumPairsWinners;
+            //ClassLogger.Verbose($"Maximum Scores: {maximumOpenTradesScore} - {maximumPairsScore}");
             foreach (IGrouping<ParameterScoreId,ParameterInterval> intervals in grouping)
             {
                 ParameterInterval[] ordered = intervals.OrderBy(i => i.Result.Profit - i.Result.DrawDown)
@@ -162,12 +216,52 @@ namespace FreqtradeMetaStrategy
                 for (int i = 0; i < ordered.Length; i++)
                 {
                     ParameterId id = new(ordered[i].ParameterType, ordered[i].ParameterValue);
-                    scores[id] = scores.TryGetValue(id, out int score) ? score + i : i;
+                    scores[id] = scores.TryGetValue(id, out int score) ? score + i + 1 : i + 1;
+                    if (i == ordered.Length-1)
+                    {
+                        winners[id] = winners.TryGetValue(id, out int winner) ? winner + 1 : 1;
+                    }
+
+                    HistoricParameterId historicId = new(ordered[i].ParameterType, ordered[i].ParameterValue,
+                                                         ordered[i].Result.StartDate);
+                    historicScores[historicId] = i + 1;
                 }
             }
 
-            return scores.Select(kv => new ParameterScore(kv.Key.Type, kv.Key.Value, kv.Value))
-                         .ToArray();
+            ParameterScore[] scoresResult = scores.Select(kv => new ParameterScore(kv.Key.Type, kv.Key.Value,
+                                                              NormalizedScore(kv), NormalizedWinner(kv)))
+                                                  .ToArray();
+            HistoricParameterScore[] historicScoresResult = historicScores.Select(kv => new HistoricParameterScore(
+                                                                               kv.Key.Type, kv.Key.Value,
+                                                                               NormalizedHistoricScore(kv),
+                                                                               kv.Key.Date))
+                                                                          .ToArray();
+            return new ScoresResult(scoresResult, historicScoresResult);
+
+            double NormalizedScore(KeyValuePair<ParameterId, int> kv)
+            {
+                int maximumScore = kv.Key.Type == ParameterType.MaxOpenTrades
+                                       ? maximumOpenTradesScore
+                                       : maximumPairsScore;
+                return ((double)kv.Value / maximumScore) * 100;
+            }
+
+            double NormalizedHistoricScore(KeyValuePair<HistoricParameterId, int> kv)
+            {
+                int maximumScore = kv.Key.Type == ParameterType.MaxOpenTrades
+                                       ? openTradesValuesCount
+                                       : pairsValuesCount;
+                return ((double)kv.Value / maximumScore) * 100;
+            }
+            
+            double NormalizedWinner(KeyValuePair<ParameterId, int> kv)
+            {
+                int maximumWinner = kv.Key.Type == ParameterType.MaxOpenTrades
+                                       ? maximumOpenTradesWinners
+                                       : maximumPairsWinners;
+                int totalWinner = winners.TryGetValue(kv.Key, out int winner) ? winner : 0;
+                return ((double)totalWinner / maximumWinner) * 100;
+            }
         }
 
         private static void SaveResult(ParameterOptimizationTestResult result, string resultFile)
@@ -209,6 +303,8 @@ namespace FreqtradeMetaStrategy
 
         private record ParameterScoreId(ParameterType Type, string StartDate);
         private record ParameterId(ParameterType Type, int Value);
+        private record HistoricParameterId(ParameterType Type, int Value, string Date);
+        private record ScoresResult(ParameterScore[] Scores, HistoricParameterScore[] HistoricScores);
 
         private record ParameterTest(string StartDate, string EndDate, ParameterType Type, int Value)
         {
