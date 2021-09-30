@@ -47,11 +47,8 @@ namespace FreqtradeMetaStrategy
                 SaveResult(lastResult, resultFile);
             }
 
-            if (lastResult.Blacklist == null)
-            {
-                RuleBasedBlacklistGeneration(lastResult);
-                SaveResult(lastResult, resultFile);
-            }
+            RuleBasedBlacklistGeneration(lastResult);
+            SaveResult(lastResult, resultFile);
 
             if (lastResult.Performance == null)
             {
@@ -64,17 +61,17 @@ namespace FreqtradeMetaStrategy
                 SaveResult(lastResult, resultFile);
             }
 
-            lastResult.ParameterOptimization ??= new ParameterOptimization();
-            if (!lastResult.ParameterOptimization.Completed)
-            {
-                OptimizeParameters(options, lastResult, configFile, longInterval,
-                                   () => SaveResult(lastResult, resultFile));
-            }
+            // lastResult.ParameterOptimization ??= new ParameterOptimization();
+            // if (!lastResult.ParameterOptimization.Completed)
+            // {
+            //     OptimizeParameters(options, lastResult, configFile, longInterval,
+            //                        () => SaveResult(lastResult, resultFile));
+            // }
             
             GenerateReport(lastResult, lastResult.Blacklist, blacklistReport, options);
             GenerateReport(lastResult, lastResult.AllPairs.Except(lastResult.Blacklist).ToArray(), greenReport, options);
             GeneratePerformanceReport(lastResult, performanceReport, options);
-            GenerateParameterOptimizationReport(lastResult, parameterOptimizationReport, options);
+            //GenerateParameterOptimizationReport(lastResult, parameterOptimizationReport, options);
             
             if (lastCompareResult?.Strategy != null)
             {
@@ -294,8 +291,7 @@ namespace FreqtradeMetaStrategy
                 if (IsOverallNegative(values) ||
                     HasBiggerNegativeThenPositive(values) ||
                     MoreNegativeThanPositive(values) ||
-                    OnlyNegativeInRecentTimes(values) ||
-                    StrongNegativeInLastInterval(values, pair))
+                    OnlyNegativeInRecentTimes(values))
                 {
                     blacklist.Add(pair);
                 }

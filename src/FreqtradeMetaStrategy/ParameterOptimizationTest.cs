@@ -201,7 +201,6 @@ namespace FreqtradeMetaStrategy
             IEnumerable<IGrouping<ParameterId, ParameterInterval>> valueGrouping = parameterIntervals.GroupBy(i => new ParameterId(i.ParameterType, i.ParameterValue));
             Dictionary<ParameterId, int> scores = new();
             Dictionary<ParameterId, int> winners = new();
-            Dictionary<ParameterId, double> accumulated = new();
             Dictionary<HistoricParameterId, int> historicScores = new();
             int openTradesValuesCount = parameterIntervals.Where(i => i.ParameterType == ParameterType.MaxOpenTrades)
                                                           .Select(i => i.ParameterValue)
@@ -240,20 +239,14 @@ namespace FreqtradeMetaStrategy
                 }
             }
 
-            foreach (IGrouping<ParameterId,ParameterInterval> intervals in valueGrouping)
-            {
-                double score = 1;
-                foreach (ParameterInterval interval in intervals)
-                {
-                    score *= interval.Result.Profit < 0
-                                 ? 1 + interval.Result.Profit / 100
-                                 : interval.Result.Profit / 100;
-                }
-                accumulated.Add(intervals.Key, score);
-            }
+            Dictionary<ParameterId, double> accumulated = valueGrouping.ToDictionary(
+                intervals => intervals.Key,
+                intervals =>
+                    intervals.Aggregate<ParameterInterval, double>(
+                        1, (current, interval) => current * (1 + interval.Result.Profit / 100)));
 
             ParameterScore[] scoresResult = scores.Select(kv => new ParameterScore(kv.Key.Type, kv.Key.Value,
-                                                              NormalizedScore(kv), NormalizedWinner(kv)))
+                                                                                   NormalizedScore(kv), NormalizedWinner(kv)))
                                                   .ToArray();
             HistoricParameterScore[] historicScoresResult = historicScores.Select(kv => new HistoricParameterScore(
                                                                                kv.Key.Type, kv.Key.Value,
